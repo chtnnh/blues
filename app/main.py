@@ -154,11 +154,12 @@ class RedisServer:
 
     async def rpush(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         value = command[2:]
-        if (value := self.internal_get(command[1])) is not None:
-            if type(value) is not list:
+        if (val := self.internal_get(command[1])) is not None:
+            if type(val) is not list:
                 await self.write(WRONG_TYPE, writer)
                 return
-            value.extend(command[2:])
+            val.extend(command[2:])
+            value = val
         self.cache[command[1]] = {"value": value}
         await self.write(len(value), writer)
 

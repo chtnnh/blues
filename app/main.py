@@ -71,7 +71,7 @@ class RedisServer:
     async def route_command(
         self, command: list[str], writer: asyncio.StreamWriter
     ) -> None:
-        com = getattr(self, command[0])
+        com = getattr(self, command[0].lower())
         await com(command, writer)
 
     async def write(

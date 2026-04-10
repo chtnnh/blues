@@ -6,6 +6,11 @@ ENCODING = "utf-8"
 PONG = "+PONG\r\n".encode(ENCODING)
 OK = "+OK\r\n".encode(ENCODING)
 NULL_STR = "$-1\r\n".encode(ENCODING)
+WRONG_TYPE = (
+    "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".encode(
+        ENCODING
+    )
+)
 MSG_LIMIT = 1024
 CRLF = "\r\n"
 
@@ -53,12 +58,14 @@ class RedisServer:
             command.append(params[i])
         return command
 
-    def encode_response(self, msg: bytes | str | list[str]) -> bytes:
+    def encode_response(self, msg: bytes | int | str | list[str]) -> bytes:
         if type(msg) is bytes:
             return msg
+        if type(msg) is int:
+            return f":{msg}{CRLF}".encode(self.encoding)
         if type(msg) is list:
             msg = CRLF.join(msg)
-        return f"${str(len(msg))}{CRLF}{msg}{CRLF}".encode(self.encoding)
+        return f"${str(len(msg))}{CRLF}{msg}{CRLF}".encode(self.encoding)  # type: ignore
 
     async def route_command(
         self, command: list[str], writer: asyncio.StreamWriter
@@ -72,9 +79,13 @@ class RedisServer:
                 await self.set(command, writer)
             case "get":
                 await self.get(command, writer)
+            case "rpush":
+                await self.rpush(command, writer)
+            case "lrange":
+                await self.lrange(command, writer)
 
     async def write(
-        self, msg: bytes | str | list[str], writer: asyncio.StreamWriter
+        self, msg: bytes | int | str | list[str], writer: asyncio.StreamWriter
     ) -> None:
         try:
             writer.write(self.encode_response(msg))
@@ -123,17 +134,52 @@ class RedisServer:
                 f"Error setting value {command[2]} for key {command[1]} from {writer.get_extra_info('peername')}: {e}"
             )
 
-    async def get(self, command: list[str], writer: asyncio.StreamWriter) -> None:
-        val = self.cache.get(command[1])
+    def internal_get(self, key: str) -> Any:
+        val = self.cache.get(key)
         # TODO: Find a better way to write that also does not flag type check
         if val is None or (
             (expiry := val.get("expiry")) is not None
             and expiry < datetime.now(self.timezone)
         ):
-            await self.write(NULL_STR, writer)
+            return None
         else:
-            value = val.get("value", "")
+            return val.get("value", "")
+
+    async def get(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        val = self.internal_get(command[1])
+        if val is None:
+            await self.write(NULL_STR, writer)
+            return
+        await self.write(val, writer)
+
+    async def rpush(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        value = command[2:]
+        if (value := self.internal_get(command[1])) is not None:
+            if type(value) is not list:
+                await self.write(WRONG_TYPE, writer)
+                return
+            value.extend(command[2:])
+        self.cache[command[1]]["value"] = value
+        await self.write(len(value), writer)
+
+    async def lrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if (value := self.internal_get(command[1])) is not None:
+            if type(value) is not list:
+                await self.write(WRONG_TYPE, writer)
+                return
+        start, end, n = int(command[2]), int(command[3]), len(value)
+        if start > n:
+            value = []
             await self.write(value, writer)
+            return
+        start = max(start, -1 * n)
+        end = min(end, n - 1)
+        if end < 0:
+            end = end + n
+        if start < 0:
+            start = start + n
+        value = value[start : end + 1]
+        await self.write(value, writer)
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

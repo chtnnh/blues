@@ -1,10 +1,11 @@
 import asyncio
 
-PONG = "+PONG\r\n".encode("utf-8")
-OK = "+OK\r\n".encode("utf-8")
+ENCODING = "utf-8"
+PONG = "+PONG\r\n".encode(ENCODING)
+OK = "+OK\r\n".encode(ENCODING)
+NULL_STR = "$-1\r\n".encode(ENCODING)
 MSG_LIMIT = 1024
 CRLF = "\r\n"
-ENCODING = "utf-8"
 
 
 class RedisServer:
@@ -19,6 +20,9 @@ class RedisServer:
         self.port = port
         self.msg_size = msg_size
         self.encoding = encoding
+        self.cache: dict[
+            str, str
+        ] = {}  # TODO: research common time complexity and actual redis DS
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -60,8 +64,14 @@ class RedisServer:
                 await self.echo(command, writer)
             case "ping":
                 await self.ping(writer)
+            case "set":
+                await self.set(command, writer)
+            case "get":
+                await self.get(command, writer)
 
-    async def write(self, msg: str, writer: asyncio.StreamWriter) -> None:
+    async def write(
+        self, msg: bytes | str | list[str], writer: asyncio.StreamWriter
+    ) -> None:
         try:
             writer.write(self.encode_response(msg))
             await writer.drain()
@@ -73,6 +83,22 @@ class RedisServer:
 
     async def ping(self, writer: asyncio.StreamWriter) -> None:
         await self.write(PONG, writer)
+
+    async def set(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        try:
+            self.cache[command[1]] = command[2]
+            await self.write(OK, writer)
+        except Exception as e:
+            print(
+                f"Error setting value {command[2]} for key {command[1]} from {writer.get_extra_info('peername')}: {e}"
+            )
+
+    async def get(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        val = self.cache.get(command[1])
+        if not val:
+            await self.write(NULL_STR, writer)
+        else:
+            await self.write(val, writer)
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

@@ -205,7 +205,11 @@ class RedisServer:
             if len(command) == 3:
                 n = min(command[3], len(value))
             self.cache[command[1]] = {"value": value[n:]}
-            await self.write(value[:n], writer)
+            if n == 1:
+                value = value[0]
+            else:
+                value = value[n:]
+            await self.write(value, writer)
             return
         await self.write(NULL_STR, writer)
 

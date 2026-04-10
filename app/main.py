@@ -1,19 +1,23 @@
 import asyncio
 
-pong = "+PONG\r\n".encode("utf-8")
+PONG = "+PONG\r\n".encode("utf-8")
+MSG_LIMIT = 1024
 
 
 class RedisServer:
-    def __init__(self, host: str = "localhost", port: int = 6379) -> None:
+    def __init__(
+        self, host: str = "localhost", port: int = 6379, msg_size: int = MSG_LIMIT
+    ) -> None:
         self.host = host
         self.port = port
+        self.msg_size = msg_size
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         try:
             while True:
-                data = await reader.read()
+                data = await reader.read(self.msg_size)
                 data = data.decode()
                 if not data:
                     break
@@ -27,7 +31,7 @@ class RedisServer:
 
     async def execute_command(self, command: str, writer: asyncio.StreamWriter) -> None:
         try:
-            writer.write(pong)
+            writer.write(PONG)
             await writer.drain()
         except Exception as e:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
@@ -46,7 +50,7 @@ def main():
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
 
-    redis_server = RedisServer("localhost", 6379)
+    redis_server = RedisServer("localhost", 6379, MSG_LIMIT)
     asyncio.run(redis_server.start())
 
 

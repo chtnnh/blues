@@ -1,6 +1,7 @@
 import asyncio
 
 PONG = "+PONG\r\n".encode("utf-8")
+OK = "+OK\r\n".encode("utf-8")
 MSG_LIMIT = 1024
 CRLF = "\r\n"
 ENCODING = "utf-8"
@@ -44,6 +45,11 @@ class RedisServer:
             command.append(params[i])
         return command
 
+    def encode_response(self, msg: bytes | str) -> bytes:
+        if type(msg) is bytes:
+            return msg
+        return f"${str(len(msg))}{msg}{CRLF}".encode(self.encoding)
+
     async def route_command(
         self, command: list[str], writer: asyncio.StreamWriter
     ) -> None:
@@ -53,15 +59,15 @@ class RedisServer:
             case "ping":
                 await self.ping(writer)
 
-    async def write(self, msg: bytes, writer: asyncio.StreamWriter) -> None:
+    async def write(self, msg: str, writer: asyncio.StreamWriter) -> None:
         try:
-            writer.write(msg)
+            writer.write(self.encode_response(msg))
             await writer.drain()
         except Exception as e:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
-        await self.write(command[1].encode(self.encoding), writer)
+        await self.write(command[1], writer)
 
     async def ping(self, writer: asyncio.StreamWriter) -> None:
         await self.write(PONG, writer)

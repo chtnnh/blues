@@ -169,18 +169,20 @@ class RedisServer:
             if type(value) is not list:
                 await self.write(WRONG_TYPE, writer)
                 return
-        start, end, n = int(command[2]), int(command[3]), len(value)
-        if start > n:
+            start, end, n = int(command[2]), int(command[3]), len(value)
+            if start > n:
+                value = []
+                await self.write(value, writer)
+                return
+            start = max(start, -1 * n)
+            end = min(end, n - 1)
+            if end < 0:
+                end = end + n
+            if start < 0:
+                start = start + n
+            value = value[start : end + 1]
+        else:
             value = []
-            await self.write(value, writer)
-            return
-        start = max(start, -1 * n)
-        end = min(end, n - 1)
-        if end < 0:
-            end = end + n
-        if start < 0:
-            start = start + n
-        value = value[start : end + 1]
         await self.write(value, writer)
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:

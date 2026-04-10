@@ -84,6 +84,10 @@ class RedisServer:
                 await self.rpush(command, writer)
             case "lrange":
                 await self.lrange(command, writer)
+            case "lpush":
+                await self.lpush(command, writer)
+            case "llen":
+                await self.llen(command, writer)
 
     async def write(
         self, msg: bytes | int | str | list[str], writer: asyncio.StreamWriter
@@ -159,7 +163,7 @@ class RedisServer:
             if type(val) is not list:
                 await self.write(WRONG_TYPE, writer)
                 return
-            val.extend(command[2:])
+            val.extend(value)
             value = val
         self.cache[command[1]] = {"value": value}
         await self.write(len(value), writer)
@@ -184,6 +188,26 @@ class RedisServer:
         else:
             value = []
         await self.write(value, writer)
+
+    async def lpush(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        value = command[2:]
+        value = value[::-1]
+        if (val := self.internal_get(command[1])) is not None:
+            if type(val) is not list:
+                await self.write(WRONG_TYPE, writer)
+                return
+            value.extend(val)
+        self.cache[command[1]] = {"value": value}
+        await self.write(len(value), writer)
+
+    async def llen(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        n = 0
+        if (value := self.internal_get(command[1])) is not None:
+            if type(value) is not list:
+                await self.write(WRONG_TYPE, writer)
+                return
+            n = len(value)
+        await self.write(n, writer)
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

@@ -64,8 +64,9 @@ class RedisServer:
         if type(msg) is int:
             return f":{msg}{CRLF}".encode(self.encoding)
         if type(msg) is list:
-            msg = CRLF.join(msg)
-        return f"${str(len(msg))}{CRLF}{msg}{CRLF}".encode(self.encoding)  # type: ignore
+            arr = "".join([f"${len(i)}{CRLF}{i}{CRLF}" for i in msg])
+            return f"*{len(msg)}{CRLF}{arr}".encode(self.encoding)
+        return f"${len(msg)}{CRLF}{msg}{CRLF}".encode(self.encoding)  # type: ignore
 
     async def route_command(
         self, command: list[str], writer: asyncio.StreamWriter

@@ -45,10 +45,12 @@ class RedisServer:
             command.append(params[i])
         return command
 
-    def encode_response(self, msg: bytes | str) -> bytes:
+    def encode_response(self, msg: bytes | str | list[str]) -> bytes:
         if type(msg) is bytes:
             return msg
-        return f"${str(len(msg))}{msg}{CRLF}".encode(self.encoding)
+        if type(msg) is list:
+            msg = CRLF.join(msg)
+        return f"${str(len(msg))}{CRLF}{msg}{CRLF}".encode(self.encoding)
 
     async def route_command(
         self, command: list[str], writer: asyncio.StreamWriter

@@ -40,9 +40,8 @@ class RedisServer:
     def parse_command(self, data: str) -> list[str]:
         command = []
         params = data.split(CRLF)
-        count_params = int(params[0][1:])
-        for i in range(count_params):
-            command.append(params[i + 2])
+        for i in range(2, len(params), 2):
+            command.append(params[i])
         return command
 
     async def route_command(

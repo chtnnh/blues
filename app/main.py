@@ -2,15 +2,22 @@ import asyncio
 
 PONG = "+PONG\r\n".encode("utf-8")
 MSG_LIMIT = 1024
+CRLF = "\r\n"
+ENCODING = "utf-8"
 
 
 class RedisServer:
     def __init__(
-        self, host: str = "localhost", port: int = 6379, msg_size: int = MSG_LIMIT
+        self,
+        host: str = "localhost",
+        port: int = 6379,
+        msg_size: int = MSG_LIMIT,
+        encoding: str = ENCODING,
     ) -> None:
         self.host = host
         self.port = port
         self.msg_size = msg_size
+        self.encoding = encoding
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -21,7 +28,8 @@ class RedisServer:
                 data = data.decode()
                 if not data:
                     break
-                await self.execute_command(data, writer)
+                command = self.parse_command(data)
+                await self.route_command(command, writer)
         except ConnectionError, BrokenPipeError:
             print(
                 f"Client {writer.get_extra_info('peername')} disconnected unexpectedly"
@@ -29,12 +37,35 @@ class RedisServer:
         finally:
             await self.disconnect_client(writer)
 
-    async def execute_command(self, command: str, writer: asyncio.StreamWriter) -> None:
+    def parse_command(self, data: str) -> list[str]:
+        command = []
+        params = data.split(CRLF)
+        count_params = int(params[0][1:])
+        for i in range(count_params):
+            command.append(params[i + 2])
+        return command
+
+    async def route_command(
+        self, command: list[str], writer: asyncio.StreamWriter
+    ) -> None:
+        match command[0].lower():
+            case "echo":
+                await self.echo(command, writer)
+            case "ping":
+                await self.ping(writer)
+
+    async def write(self, msg: bytes, writer: asyncio.StreamWriter) -> None:
         try:
-            writer.write(PONG)
+            writer.write(msg)
             await writer.drain()
         except Exception as e:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
+
+    async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        await self.write(command[1].encode(self.encoding), writer)
+
+    async def ping(self, writer: asyncio.StreamWriter) -> None:
+        await self.write(PONG, writer)
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()
@@ -50,7 +81,7 @@ def main():
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
 
-    redis_server = RedisServer("localhost", 6379, MSG_LIMIT)
+    redis_server = RedisServer("localhost", 6379, MSG_LIMIT, ENCODING)
     asyncio.run(redis_server.start())
 
 

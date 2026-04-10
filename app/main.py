@@ -71,23 +71,8 @@ class RedisServer:
     async def route_command(
         self, command: list[str], writer: asyncio.StreamWriter
     ) -> None:
-        match command[0].lower():
-            case "echo":
-                await self.echo(command, writer)
-            case "ping":
-                await self.ping(writer)
-            case "set":
-                await self.set(command, writer)
-            case "get":
-                await self.get(command, writer)
-            case "rpush":
-                await self.rpush(command, writer)
-            case "lrange":
-                await self.lrange(command, writer)
-            case "lpush":
-                await self.lpush(command, writer)
-            case "llen":
-                await self.llen(command, writer)
+        com = getattr(self, command[0])
+        await com(command, writer)
 
     async def write(
         self, msg: bytes | int | str | list[str], writer: asyncio.StreamWriter
@@ -101,7 +86,7 @@ class RedisServer:
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         await self.write(command[1], writer)
 
-    async def ping(self, writer: asyncio.StreamWriter) -> None:
+    async def ping(self, _command: list[str], writer: asyncio.StreamWriter) -> None:
         await self.write(PONG, writer)
 
     async def set(self, command: list[str], writer: asyncio.StreamWriter) -> None:
@@ -208,6 +193,21 @@ class RedisServer:
                 return
             n = len(value)
         await self.write(n, writer)
+
+    async def lpop(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        # TODO: figure out a way to modularize the below 4 lines
+        # Don't Repeat Yourself (this is like the 4th repitition of these lines)
+        if (value := self.internal_get(command[1])) is not None:
+            if type(value) is not list:
+                await self.write(WRONG_TYPE, writer)
+                return
+            n = 1
+            if len(command) == 3:
+                n = min(command[3], len(value))
+            self.cache[command[1]] = {"value": value[n:]}
+            await self.write(value[:n], writer)
+            return
+        await self.write(NULL_STR, writer)
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

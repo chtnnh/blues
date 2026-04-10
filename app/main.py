@@ -127,7 +127,8 @@ class RedisServer:
         val = self.cache.get(command[1])
         # TODO: Find a better way to write that also does not flag type check
         if val is None or (
-            (expiry := val.get("expiry")) is not None and expiry < datetime.now()
+            (expiry := val.get("expiry")) is not None
+            and expiry < datetime.now(self.timezone)
         ):
             await self.write(NULL_STR, writer)
         else:

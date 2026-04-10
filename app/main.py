@@ -203,7 +203,7 @@ class RedisServer:
                 return
             n = 1
             if len(command) == 3:
-                n = min(command[2], len(value))
+                n = min(int(command[2]), len(value))
             self.cache[command[1]] = {"value": value[n:]}
             if n == 1:
                 value = value[0]

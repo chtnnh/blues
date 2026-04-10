@@ -1,4 +1,6 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 ENCODING = "utf-8"
 PONG = "+PONG\r\n".encode(ENCODING)
@@ -15,13 +17,15 @@ class RedisServer:
         port: int = 6379,
         msg_size: int = MSG_LIMIT,
         encoding: str = ENCODING,
+        timezone: timezone = timezone.utc,
     ) -> None:
         self.host = host
         self.port = port
         self.msg_size = msg_size
         self.encoding = encoding
+        self.timezone = timezone
         self.cache: dict[
-            str, str
+            str, dict[str, Any]
         ] = {}  # TODO: research common time complexity and actual redis DS
 
     async def handle_client(
@@ -86,7 +90,33 @@ class RedisServer:
 
     async def set(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         try:
-            self.cache[command[1]] = command[2]
+            val: dict[str, Any] = {"value": command[2]}
+            if len(command) > 3:
+                # TODO: implement remaining SET options
+                for idx in range(3, len(command)):
+                    option = command[idx]
+                    match option.lower():
+                        case "px":
+                            val["expiry"] = datetime.now(self.timezone) + timedelta(
+                                milliseconds=int(command[idx + 1])
+                            )
+                            idx += 1
+                        case "pxat":
+                            val["expiry"] = datetime.fromtimestamp(
+                                int(command[idx + 1]) / 1000, self.timezone
+                            )
+                            idx += 1
+                        case "ex":
+                            val["expiry"] = datetime.now(self.timezone) + timedelta(
+                                seconds=int(command[idx + 1])
+                            )
+                            idx += 1
+                        case "exat":
+                            val["expiry"] = datetime.fromtimestamp(
+                                int(command[idx + 1]), self.timezone
+                            )
+                            idx += 1
+            self.cache[command[1]] = val
             await self.write(OK, writer)
         except Exception as e:
             print(
@@ -95,10 +125,14 @@ class RedisServer:
 
     async def get(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         val = self.cache.get(command[1])
-        if not val:
+        # TODO: Find a better way to write that also does not flag type check
+        if val is None or (
+            (expiry := val.get("expiry")) is not None and expiry < datetime.now()
+        ):
             await self.write(NULL_STR, writer)
         else:
-            await self.write(val, writer)
+            value = val.get("value", "")
+            await self.write(value, writer)
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()
@@ -114,7 +148,7 @@ def main():
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
 
-    redis_server = RedisServer("localhost", 6379, MSG_LIMIT, ENCODING)
+    redis_server = RedisServer("localhost", 6379, MSG_LIMIT, ENCODING, timezone.utc)
     asyncio.run(redis_server.start())
 
 

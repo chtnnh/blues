@@ -208,7 +208,7 @@ class RedisServer:
             if n == 1:
                 value = value[0]
             else:
-                value = value[n:]
+                value = value[:n]
             await self.write(value, writer)
             return
         await self.write(NULL_STR, writer)

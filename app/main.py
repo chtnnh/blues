@@ -159,7 +159,7 @@ class RedisServer:
                 await self.write(WRONG_TYPE, writer)
                 return
             value.extend(command[2:])
-        self.cache[command[1]]["value"] = value
+        self.cache[command[1]] = {"value": value}
         await self.write(len(value), writer)
 
     async def lrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:

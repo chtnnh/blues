@@ -6,6 +6,7 @@ ENCODING = "utf-8"
 PONG = "+PONG\r\n".encode(ENCODING)
 OK = "+OK\r\n".encode(ENCODING)
 NULL_STR = "$-1\r\n".encode(ENCODING)
+NULL_ARR = "*-1\r\n".encode(ENCODING)
 WRONG_TYPE = (
     "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".encode(
         ENCODING
@@ -270,7 +271,7 @@ class RedisServer:
         ):
             await asyncio.sleep(0)
         else:
-            await self.write(NULL_STR, writer)
+            await self.write(NULL_ARR, writer)
             # third pass to remove BLOPs
             for key in command[1:]:
                 self.blpop_queue[key].remove(writer)

@@ -32,10 +32,14 @@ class RedisServer:
         self.cache: dict[
             str, dict[str, Any]
         ] = {}  # TODO: research common time complexity and actual redis DS
+        self.blpop_queue: dict[
+            str, list[asyncio.StreamWriter]
+        ] = {}  # TODO: implement key based ordering
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        client = writer.get_extra_info("peername")
         try:
             while True:
                 data = await reader.read(self.msg_size)
@@ -43,11 +47,10 @@ class RedisServer:
                 if not data:
                     break
                 command = self.parse_command(data)
+                print(f"Routing command for {client}")
                 await self.route_command(command, writer)
         except ConnectionError, BrokenPipeError:
-            print(
-                f"Client {writer.get_extra_info('peername')} disconnected unexpectedly"
-            )
+            print(f"Client {client} disconnected unexpectedly")
         finally:
             await self.disconnect_client(writer)
 
@@ -57,6 +60,12 @@ class RedisServer:
         for i in range(2, len(params), 2):
             command.append(params[i])
         return command
+
+    async def route_command(
+        self, command: list[str], writer: asyncio.StreamWriter
+    ) -> None:
+        com = getattr(self, command[0].lower())
+        await com(command, writer)
 
     def encode_response(self, msg: bytes | int | str | list[str]) -> bytes:
         if type(msg) is bytes:
@@ -68,12 +77,6 @@ class RedisServer:
             return f"*{len(msg)}{CRLF}{arr}".encode(self.encoding)
         return f"${len(msg)}{CRLF}{msg}{CRLF}".encode(self.encoding)  # type: ignore
 
-    async def route_command(
-        self, command: list[str], writer: asyncio.StreamWriter
-    ) -> None:
-        com = getattr(self, command[0].lower())
-        await com(command, writer)
-
     async def write(
         self, msg: bytes | int | str | list[str], writer: asyncio.StreamWriter
     ) -> None:
@@ -82,12 +85,15 @@ class RedisServer:
             await writer.drain()
         except Exception as e:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
+            raise
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         await self.write(command[1], writer)
+        print(f"Executed ECHO for {writer.get_extra_info('peername')}")
 
     async def ping(self, _command: list[str], writer: asyncio.StreamWriter) -> None:
         await self.write(PONG, writer)
+        print(f"Executed PONG for {writer.get_extra_info('peername')}")
 
     async def set(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         try:
@@ -119,6 +125,7 @@ class RedisServer:
                             idx += 1
             self.cache[command[1]] = val
             await self.write(OK, writer)
+            print(f"Executed SET for {writer.get_extra_info('peername')}")
         except Exception as e:
             print(
                 f"Error setting value {command[2]} for key {command[1]} from {writer.get_extra_info('peername')}: {e}"
@@ -139,19 +146,25 @@ class RedisServer:
         val = self.internal_get(command[1])
         if val is None:
             await self.write(NULL_STR, writer)
+            print(f"Executed GET for {writer.get_extra_info('peername')}")
             return
         await self.write(val, writer)
+        print(f"Executed GET for {writer.get_extra_info('peername')}")
 
     async def rpush(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         value = command[2:]
-        if (val := self.internal_get(command[1])) is not None:
+        key = command[1]
+        if (val := self.internal_get(key)) is not None:
             if type(val) is not list:
                 await self.write(WRONG_TYPE, writer)
                 return
             val.extend(value)
             value = val
-        self.cache[command[1]] = {"value": value}
+        self.cache[key] = {"value": value}
         await self.write(len(value), writer)
+        print(f"Executed RPUSH for {writer.get_extra_info('peername')}")
+        # TODO: ensure atomic transactions don't execute this
+        await self.blpop_helper(key)
 
     async def lrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if (value := self.internal_get(command[1])) is not None:
@@ -173,17 +186,22 @@ class RedisServer:
         else:
             value = []
         await self.write(value, writer)
+        print(f"Executed LRANGE for {writer.get_extra_info('peername')}")
 
     async def lpush(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         value = command[2:]
         value = value[::-1]
-        if (val := self.internal_get(command[1])) is not None:
+        key = command[1]
+        if (val := self.internal_get(key)) is not None:
             if type(val) is not list:
                 await self.write(WRONG_TYPE, writer)
                 return
             value.extend(val)
-        self.cache[command[1]] = {"value": value}
+        self.cache[key] = {"value": value}
         await self.write(len(value), writer)
+        print(f"Executed LPUSH for {writer.get_extra_info('peername')}")
+        # TODO: ensure atomic transactions don't execute this
+        await self.blpop_helper(key)
 
     async def llen(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         n = 0
@@ -193,14 +211,12 @@ class RedisServer:
                 return
             n = len(value)
         await self.write(n, writer)
+        print(f"Executed LLEN for {writer.get_extra_info('peername')}")
 
-    async def lpop(self, command: list[str], writer: asyncio.StreamWriter) -> None:
-        # TODO: figure out a way to modularize the below 4 lines
-        # Don't Repeat Yourself (this is like the 4th repitition of these lines)
+    def internal_lpop(self, command: list[str]) -> list[str] | str | bool:
         if (value := self.internal_get(command[1])) is not None:
             if type(value) is not list:
-                await self.write(WRONG_TYPE, writer)
-                return
+                return False
             n = 1
             if len(command) == 3:
                 n = min(int(command[2]), len(value))
@@ -209,13 +225,73 @@ class RedisServer:
                 value = value[0]
             else:
                 value = value[:n]
-            await self.write(value, writer)
-            return
-        await self.write(NULL_STR, writer)
+            return value
+        return True
+
+    async def lpop(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        # TODO: figure out a way to modularize the below 4 lines
+        # Don't Repeat Yourself (this is like the 4th repitition of these lines)
+        pop = self.internal_lpop(command)
+        if pop:
+            if type(pop) is not bool:
+                await self.write(pop, writer)
+            else:
+                await self.write(NULL_STR, writer)
+        else:
+            await self.write(WRONG_TYPE, writer)
+        print(f"Executed LPOP for {writer.get_extra_info('peername')}")
+
+    async def blpop(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        # BLPOP key [key...] timeout
+        entry = datetime.now(self.timezone)
+        try:
+            timeout = float(command[-1])
+            command.pop()
+        except ValueError:
+            timeout = 0
+        # first pass to check if any list is non-empty
+        for key in command[1:]:
+            if (value := self.internal_get(command[1])) is not None:
+                if type(value) is not list:
+                    await self.write(WRONG_TYPE, writer)
+                    return
+                if len(value) > 0:
+                    self.cache[key] = {"value": value[1:]}
+                    await self.write([key, value[0]], writer)
+                    return
+        # second pass to add BLPOPs if all lists are empty
+        for key in command[1:]:
+            queue = self.blpop_queue.get(key, [])
+            queue.append(writer)
+            self.blpop_queue[key] = queue
+        # timeout
+        while timeout == 0 or (
+            datetime.now(self.timezone) - entry < timedelta(seconds=timeout)
+        ):
+            await asyncio.sleep(0)
+        else:
+            await self.write(NULL_STR, writer)
+            # third pass to remove BLOPs
+            for key in command[1:]:
+                self.blpop_queue[key].remove(writer)
+        print(f"Executed BLPOP for {writer.get_extra_info('peername')}")
+
+    async def blpop_helper(self, key: str) -> None:
+        # NOTE: dict.keys() returns a dictview and changes when the underlying dict changes
+        queue = self.blpop_queue.get(key, [])
+        for writer in queue:
+            try:
+                await self.write([key, self.cache[key]["value"][0]], writer)
+                self.internal_lpop(["lpop", key])
+                self.blpop_queue[key].remove(writer)
+                break
+            except Exception:
+                continue
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()
         await writer.wait_closed()
+        print(f"Client {writer.get_extra_info('peername')} disconnected gracefully")
 
     async def start(self) -> None:
         server = await asyncio.start_server(self.handle_client, self.host, self.port)

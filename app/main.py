@@ -68,7 +68,11 @@ class RedisServer:
         com = getattr(self, command[0].lower())
         await com(command, writer)
 
-    def encode_response(self, msg: bytes | int | str | list[str]) -> bytes:
+    def encode_response(
+        self, msg: bytes | int | str | list[str], simple: bool = False
+    ) -> bytes:
+        if simple:
+            return f"+{msg}{CRLF}".encode(self.encoding)
         if type(msg) is bytes:
             return msg
         if type(msg) is int:
@@ -79,10 +83,13 @@ class RedisServer:
         return f"${len(msg)}{CRLF}{msg}{CRLF}".encode(self.encoding)  # type: ignore
 
     async def write(
-        self, msg: bytes | int | str | list[str], writer: asyncio.StreamWriter
+        self,
+        msg: bytes | int | str | list[str],
+        writer: asyncio.StreamWriter,
+        simple: bool = False,
     ) -> None:
         try:
-            writer.write(self.encode_response(msg))
+            writer.write(self.encode_response(msg, simple))
             await writer.drain()
         except Exception as e:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
@@ -141,7 +148,7 @@ class RedisServer:
         ):
             return None
         else:
-            return val.get("value", "")
+            return val.get("value")
 
     async def get(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         val = self.internal_get(command[1])
@@ -288,6 +295,18 @@ class RedisServer:
                 break
             except Exception:
                 continue
+
+    async def type(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        # TODO: set, zset, hash, stream, and vectorset.
+        val = self.internal_get(command[1])
+        match type(val).__name__:
+            case "NoneType":
+                await self.write("none", writer, True)
+            case "str":
+                await self.write("string", writer, True)
+            case "list":
+                await self.write("list", writer, True)
+        print(f"Executed TYPE for {writer.get_extra_info('peername')}")
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

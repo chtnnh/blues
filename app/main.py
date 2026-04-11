@@ -253,7 +253,8 @@ class RedisServer:
         # second pass to add BLPOPs if all lists are empty
         for key in command[1:]:
             queue = self.blpop_queue.get(key, [])
-            self.blpop_queue[key] = queue.append(writer)
+            queue.append(writer)
+            self.blpop_queue[key] = queue
         # timeout
         while timeout == 0 or (
             datetime.now(self.timezone) - entry < timedelta(seconds=timeout)

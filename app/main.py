@@ -159,7 +159,7 @@ class RedisServer:
         self.cache[key] = {"value": value}
         await self.write(len(value), writer)
         # TODO: ensure atomic transactions don't execute this
-        await self.blpop_helper(key)
+        # await self.blpop_helper(key)
 
     async def lrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if (value := self.internal_get(command[1])) is not None:

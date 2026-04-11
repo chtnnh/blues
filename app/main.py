@@ -79,14 +79,13 @@ class RedisServer:
 
     async def write(
         self, msg: bytes | int | str | list[str], writer: asyncio.StreamWriter
-    ) -> int:
+    ) -> None:
         try:
             writer.write(self.encode_response(msg))
             await writer.drain()
-            return 0
         except Exception as e:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
-            return 1
+            raise
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         await self.write(command[1], writer)
@@ -159,7 +158,7 @@ class RedisServer:
         self.cache[key] = {"value": value}
         await self.write(len(value), writer)
         # TODO: ensure atomic transactions don't execute this
-        # await self.blpop_helper(key)
+        await self.blpop_helper(key)
 
     async def lrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if (value := self.internal_get(command[1])) is not None:
@@ -270,12 +269,13 @@ class RedisServer:
         # NOTE: dict.keys() returns a dictview and changes when the underlying dict changes
         queue = self.blpop_queue.get(key, [])
         for writer in queue:
-            if await self.write([key, self.cache[key]["value"][0]], writer):
-                continue
-            else:
+            try:
+                await self.write([key, self.cache[key]["value"][0]], writer)
                 self.internal_lpop(["lpop", key])
                 self.blpop_queue[key].remove(writer)
                 break
+            except Exception:
+                continue
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

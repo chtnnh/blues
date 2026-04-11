@@ -32,6 +32,9 @@ class RedisServer:
         self.cache: dict[
             str, dict[str, Any]
         ] = {}  # TODO: research common time complexity and actual redis DS
+        self.blpop_queue: dict[
+            str, list[asyncio.StreamWriter]
+        ] = {}  # TODO: implement key based ordering
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -147,15 +150,13 @@ class RedisServer:
     async def rpush(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         value = command[2:]
         key = command[1]
-        blpop: dict[asyncio.StreamWriter, int] = {}
         if (val := self.internal_get(key)) is not None:
             if type(val) is not list:
                 await self.write(WRONG_TYPE, writer)
                 return
             val.extend(value)
             value = val
-            blpop = self.cache[key]["blpop"]
-        self.cache[key] = {"value": value, "blpop": blpop}
+        self.cache[key] = {"value": value}
         await self.write(len(value), writer)
         # TODO: ensure atomic transactions don't execute this
         await self.blpop_helper(key)
@@ -185,14 +186,12 @@ class RedisServer:
         value = command[2:]
         value = value[::-1]
         key = command[1]
-        blpop: dict[asyncio.StreamWriter, int] = {}
         if (val := self.internal_get(key)) is not None:
             if type(val) is not list:
                 await self.write(WRONG_TYPE, writer)
                 return
             value.extend(val)
-            blpop = self.cache[key]["blpop"]
-        self.cache[key] = {"value": value, "blpop": blpop}
+        self.cache[key] = {"value": value}
         await self.write(len(value), writer)
         # TODO: ensure atomic transactions don't execute this
         await self.blpop_helper(key)
@@ -238,6 +237,7 @@ class RedisServer:
         entry = datetime.now(self.timezone)
         try:
             timeout = float(command[-1])
+            command.pop()
         except ValueError:
             timeout = 0
         # first pass to check if any list is non-empty
@@ -251,8 +251,9 @@ class RedisServer:
                     await self.write([key, value[0]], writer)
                     return
         # second pass to add BLPOPs if all lists are empty
-        for idx, key in enumerate(command[1:]):
-            self.cache[key]["blpop"].set(writer, idx)
+        for key in command[1:]:
+            queue = self.blpop_queue.get(key, [])
+            self.blpop_queue[key] = queue.append(writer)
         # timeout
         while timeout == 0 or (
             datetime.now(self.timezone) - entry < timedelta(seconds=timeout)
@@ -262,17 +263,17 @@ class RedisServer:
             await self.write(NULL_STR, writer)
             # third pass to remove BLOPs
             for key in command[1:]:
-                del self.cache[key]["blpop"][writer]
+                self.blpop_queue[key].remove(writer)
 
     async def blpop_helper(self, key: str) -> None:
         # NOTE: dict.keys() returns a dictview and changes when the underlying dict changes
-        queue = self.cache[key]["blpop"].keys()
+        queue = self.blpop_queue.get(key, [])
         for writer in queue:
             if await self.write([key, self.cache[key]["value"][0]], writer):
                 continue
             else:
                 self.internal_lpop(["lpop", key])
-                del self.cache[key]["blpop"][writer]
+                self.blpop_queue[key].remove(writer)
                 break
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:

@@ -39,6 +39,7 @@ class RedisServer:
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        client = writer.get_extra_info("peername")
         try:
             while True:
                 data = await reader.read(self.msg_size)
@@ -46,11 +47,10 @@ class RedisServer:
                 if not data:
                     break
                 command = self.parse_command(data)
+                print(f"Routing command for {client}")
                 await self.route_command(command, writer)
         except ConnectionError, BrokenPipeError:
-            print(
-                f"Client {writer.get_extra_info('peername')} disconnected unexpectedly"
-            )
+            print(f"Client {client} disconnected unexpectedly")
         finally:
             await self.disconnect_client(writer)
 
@@ -61,6 +61,12 @@ class RedisServer:
             command.append(params[i])
         return command
 
+    async def route_command(
+        self, command: list[str], writer: asyncio.StreamWriter
+    ) -> None:
+        com = getattr(self, command[0].lower())
+        await com(command, writer)
+
     def encode_response(self, msg: bytes | int | str | list[str]) -> bytes:
         if type(msg) is bytes:
             return msg
@@ -70,12 +76,6 @@ class RedisServer:
             arr = "".join([f"${len(i)}{CRLF}{i}{CRLF}" for i in msg])
             return f"*{len(msg)}{CRLF}{arr}".encode(self.encoding)
         return f"${len(msg)}{CRLF}{msg}{CRLF}".encode(self.encoding)  # type: ignore
-
-    async def route_command(
-        self, command: list[str], writer: asyncio.StreamWriter
-    ) -> None:
-        com = getattr(self, command[0].lower())
-        await com(command, writer)
 
     async def write(
         self, msg: bytes | int | str | list[str], writer: asyncio.StreamWriter
@@ -89,9 +89,11 @@ class RedisServer:
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         await self.write(command[1], writer)
+        print(f"Executed ECHO for {writer.get_extra_info('peername')}")
 
     async def ping(self, _command: list[str], writer: asyncio.StreamWriter) -> None:
         await self.write(PONG, writer)
+        print(f"Executed PONG for {writer.get_extra_info('peername')}")
 
     async def set(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         try:
@@ -123,6 +125,7 @@ class RedisServer:
                             idx += 1
             self.cache[command[1]] = val
             await self.write(OK, writer)
+            print(f"Executed SET for {writer.get_extra_info('peername')}")
         except Exception as e:
             print(
                 f"Error setting value {command[2]} for key {command[1]} from {writer.get_extra_info('peername')}: {e}"
@@ -143,8 +146,10 @@ class RedisServer:
         val = self.internal_get(command[1])
         if val is None:
             await self.write(NULL_STR, writer)
+            print(f"Executed GET for {writer.get_extra_info('peername')}")
             return
         await self.write(val, writer)
+        print(f"Executed GET for {writer.get_extra_info('peername')}")
 
     async def rpush(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         value = command[2:]
@@ -157,6 +162,7 @@ class RedisServer:
             value = val
         self.cache[key] = {"value": value}
         await self.write(len(value), writer)
+        print(f"Executed RPUSH for {writer.get_extra_info('peername')}")
         # TODO: ensure atomic transactions don't execute this
         await self.blpop_helper(key)
 
@@ -180,6 +186,7 @@ class RedisServer:
         else:
             value = []
         await self.write(value, writer)
+        print(f"Executed LRANGE for {writer.get_extra_info('peername')}")
 
     async def lpush(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         value = command[2:]
@@ -192,6 +199,7 @@ class RedisServer:
             value.extend(val)
         self.cache[key] = {"value": value}
         await self.write(len(value), writer)
+        print(f"Executed LPUSH for {writer.get_extra_info('peername')}")
         # TODO: ensure atomic transactions don't execute this
         await self.blpop_helper(key)
 
@@ -203,6 +211,7 @@ class RedisServer:
                 return
             n = len(value)
         await self.write(n, writer)
+        print(f"Executed LLEN for {writer.get_extra_info('peername')}")
 
     def internal_lpop(self, command: list[str]) -> list[str] | str | bool:
         if (value := self.internal_get(command[1])) is not None:
@@ -230,6 +239,7 @@ class RedisServer:
                 await self.write(NULL_STR, writer)
         else:
             await self.write(WRONG_TYPE, writer)
+        print(f"Executed LPOP for {writer.get_extra_info('peername')}")
 
     async def blpop(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         # BLPOP key [key...] timeout
@@ -258,12 +268,13 @@ class RedisServer:
         while timeout == 0 or (
             datetime.now(self.timezone) - entry < timedelta(seconds=timeout)
         ):
-            continue
+            await asyncio.sleep(0)
         else:
             await self.write(NULL_STR, writer)
             # third pass to remove BLOPs
             for key in command[1:]:
                 self.blpop_queue[key].remove(writer)
+        print(f"Executed BLPOP for {writer.get_extra_info('peername')}")
 
     async def blpop_helper(self, key: str) -> None:
         # NOTE: dict.keys() returns a dictview and changes when the underlying dict changes
@@ -280,6 +291,7 @@ class RedisServer:
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()
         await writer.wait_closed()
+        print(f"Client {writer.get_extra_info('peername')} disconnected gracefully")
 
     async def start(self) -> None:
         server = await asyncio.start_server(self.handle_client, self.host, self.port)

@@ -1,13 +1,17 @@
 import asyncio
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta, timezone
+from operator import itemgetter
 from typing import Any
 
 from app.deps.pygtrie import StringTrie
+from app.utils import flatten
 
 ENCODING = "utf-8"
 NULL_STR = "$-1\r\n".encode(ENCODING)
 NULL_ARR = "*-1\r\n".encode(ENCODING)
 MIN_STREAM_ID = "0-1"
+WRONG_NUMBER_OF_ARGS = "ERR wrong number of arguments for '*' command"
 WRONG_TYPE = "WRONGTYPE Operation against a key holding the wrong kind of value"
 LOW_STREAM_ID = (
     "ERR The ID specified in XADD is equal or smaller than the target stream top item"
@@ -71,7 +75,7 @@ class RedisServer:
 
     def encode_response(
         self,
-        msg: bytes | int | str | list[str],
+        msg: bytes | int | str | list[Any],
         isSimple: bool = False,
         isError: bool = False,
     ) -> bytes:
@@ -84,13 +88,13 @@ class RedisServer:
         if type(msg) is int:
             return f":{msg}{CRLF}".encode(self.encoding)
         if type(msg) is list:
-            arr = "".join([f"${len(i)}{CRLF}{i}{CRLF}" for i in msg])
+            arr = "".join([self.encode_response(i).decode(self.encoding) for i in msg])
             return f"*{len(msg)}{CRLF}{arr}".encode(self.encoding)
         return f"${len(msg)}{CRLF}{msg}{CRLF}".encode(self.encoding)  # type: ignore
 
     async def write(
         self,
-        msg: bytes | int | str | list[str],
+        msg: bytes | int | str | list[Any],
         writer: asyncio.StreamWriter,
         isSimple: bool = False,
         isError: bool = False,
@@ -382,6 +386,57 @@ class RedisServer:
         self.cache[key] = {"value": value}
         await self.write(stream_id, writer)
         print(f"Executed XADD for {writer.get_extra_info('peername')}")
+
+    async def xrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if (args := len(command)) > 6 or args == 5 or args < 4:
+            await self.write(
+                WRONG_NUMBER_OF_ARGS.replace("*", "xrange"), writer, True, True
+            )
+            print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
+            return
+
+        key = command[1]
+        val = self.internal_get(key)
+
+        if val is None:
+            # return empty array if key not found
+            await self.write([], writer)
+            print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
+            return
+
+        items = val.items()
+
+        if command[2] == "-":
+            start = 0
+        elif command[2][0] == "(":
+            # TODO: figure out why you need + 1 here
+            start = bisect_right(items, command[2][1:], key=itemgetter(0)) + 1
+        else:
+            start = bisect_left(items, command[2], key=itemgetter(0))
+
+        if start == len(items):
+            # return empty array if start greater than all stream ids
+            await self.write([], writer)
+            print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
+            return
+
+        if command[3] == "+":
+            end = len(items) - 1
+        elif command[3][0] == "(":
+            # TODO: figure out why you need - 1 here
+            end = bisect_left(items, command[3][1:], key=itemgetter(0)) - 1
+        else:
+            end = bisect_right(items, command[3], key=itemgetter(0))
+        # Python slicing is exclusive
+        end = end + 1
+
+        items = [[item[0], flatten(item[1].items())] for item in items[start:end]]
+
+        if len(command) == 6:
+            items = items[: int(command[5])]
+
+        await self.write(items, writer)
+        print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

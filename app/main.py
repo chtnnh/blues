@@ -7,7 +7,12 @@ from app.deps.pygtrie import StringTrie
 ENCODING = "utf-8"
 NULL_STR = "$-1\r\n".encode(ENCODING)
 NULL_ARR = "*-1\r\n".encode(ENCODING)
+MIN_STREAM_ID = "0-1"
 WRONG_TYPE = "WRONGTYPE Operation against a key holding the wrong kind of value"
+LOW_STREAM_ID = (
+    "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+)
+LOWER_THAN_MIN_STREAM_ID = "ERR The ID specified in XADD must be greater than 0-0"
 MSG_LIMIT = 1024
 CRLF = "\r\n"
 
@@ -316,24 +321,58 @@ class RedisServer:
         # TODO: implement options
 
         value = StringTrie(separator="-")
+        value.enable_sorting()
         stream = {}
         for i in range(3, len(command), 2):
             stream[command[i]] = command[i + 1]
 
         key = command[1]
         stream_id = command[2]
+        now = f"{int(datetime.now(self.timezone).timestamp() * 1000)}"
         idx = 0
-
-        if stream_id == "*":
-            # TODO: handle same ms stream_id generation
-            stream_id = f"{int(datetime.now(self.timezone).timestamp() * 1000)}-{idx}"
 
         if (val := self.internal_get(key)) is not None:
             if type(val) is not type(StringTrie()):
                 await self.write(WRONG_TYPE, writer)
-            if val.__contains__(stream_id):
-                stream = val[stream_id] | stream  # type: ignore
+
+            # generate stream id
+            if stream_id.__contains__("*"):
+                if stream_id == "*":
+                    stream_id = f"{now}-{idx}"
+                else:
+                    # TODO: look into race conditions for same ms id generation
+                    # assuming format number-*
+                    try:
+                        idx = (
+                            int(
+                                val.keys(prefix=stream_id.split("-")[0])[-1].split("-")[  # type: ignore
+                                    1
+                                ]
+                            )
+                            + 1
+                        )
+                    except KeyError:
+                        pass
+                    stream_id = stream_id.replace("*", str(idx))
+
+            # validate stream id
+            if stream_id <= val.keys()[-1]:  # type: ignore
+                await self.write(LOW_STREAM_ID, writer, True, True)
+                print(f"Executed XADD for {writer.get_extra_info('peername')}")
+                return
+            elif stream_id < MIN_STREAM_ID:
+                await self.write(LOWER_THAN_MIN_STREAM_ID, writer, True, True)
+                print(f"Executed XADD for {writer.get_extra_info('peername')}")
+                return
             value = val
+
+        # generate stream id
+        if stream_id.__contains__("*"):
+            if stream_id == "*":
+                stream_id = f"{now}-{idx}"
+            else:
+                # assuming format number-*
+                stream_id = stream_id.replace("*", str(idx))
 
         value[stream_id] = stream
         self.cache[key] = {"value": value}

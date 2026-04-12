@@ -2,6 +2,8 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.deps.pygtrie import StringTrie
+
 ENCODING = "utf-8"
 PONG = "+PONG\r\n".encode(ENCODING)
 OK = "+OK\r\n".encode(ENCODING)
@@ -222,6 +224,8 @@ class RedisServer:
         print(f"Executed LLEN for {writer.get_extra_info('peername')}")
 
     def internal_lpop(self, command: list[str]) -> list[str] | str | bool:
+        # TODO: figure out a way to modularize the below 4 lines
+        # Don't Repeat Yourself (this is like the 4th repitition of these lines)
         if (value := self.internal_get(command[1])) is not None:
             if type(value) is not list:
                 return False
@@ -237,8 +241,6 @@ class RedisServer:
         return True
 
     async def lpop(self, command: list[str], writer: asyncio.StreamWriter) -> None:
-        # TODO: figure out a way to modularize the below 4 lines
-        # Don't Repeat Yourself (this is like the 4th repitition of these lines)
         pop = self.internal_lpop(command)
         if pop:
             if type(pop) is not bool:
@@ -306,7 +308,37 @@ class RedisServer:
                 await self.write("string", writer, True)
             case "list":
                 await self.write("list", writer, True)
+            case "StringTrie":
+                await self.write("stream", writer, True)
         print(f"Executed TYPE for {writer.get_extra_info('peername')}")
+
+    async def xadd(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        # TODO: implement options
+
+        value = StringTrie(separator="-")
+        stream = {}
+        for i in range(3, len(command), 2):
+            stream[command[i]] = command[i + 1]
+
+        key = command[1]
+        stream_id = command[2]
+        idx = 0
+
+        if stream_id == "*":
+            # TODO: handle same ms stream_id generation
+            stream_id = f"{int(datetime.now(self.timezone).timestamp() * 1000)}-{idx}"
+
+        if (val := self.internal_get(key)) is not None:
+            if type(val) is not type(StringTrie()):
+                await self.write(WRONG_TYPE, writer)
+            if val.__contains__(stream_id):
+                stream = val[stream_id] | stream  # type: ignore
+            value = val
+
+        value[stream_id] = stream
+        self.cache[key] = {"value": value}
+        await self.write(stream_id, writer)
+        print(f"Executed XADD for {writer.get_extra_info('peername')}")
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

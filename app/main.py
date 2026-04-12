@@ -352,6 +352,8 @@ class RedisServer:
                             + 1
                         )
                     except KeyError:
+                        if stream_id == "0-*":
+                            idx = 1
                         pass
                     stream_id = stream_id.replace("*", str(idx))
 
@@ -371,6 +373,8 @@ class RedisServer:
             if stream_id == "*":
                 stream_id = f"{now}-{idx}"
             else:
+                if stream_id == "0-*":
+                    idx = 1
                 # assuming format number-*
                 stream_id = stream_id.replace("*", str(idx))
 

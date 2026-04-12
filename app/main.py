@@ -5,15 +5,9 @@ from typing import Any
 from app.deps.pygtrie import StringTrie
 
 ENCODING = "utf-8"
-PONG = "+PONG\r\n".encode(ENCODING)
-OK = "+OK\r\n".encode(ENCODING)
 NULL_STR = "$-1\r\n".encode(ENCODING)
 NULL_ARR = "*-1\r\n".encode(ENCODING)
-WRONG_TYPE = (
-    "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n".encode(
-        ENCODING
-    )
-)
+WRONG_TYPE = "WRONGTYPE Operation against a key holding the wrong kind of value"
 MSG_LIMIT = 1024
 CRLF = "\r\n"
 
@@ -71,9 +65,14 @@ class RedisServer:
         await com(command, writer)
 
     def encode_response(
-        self, msg: bytes | int | str | list[str], simple: bool = False
+        self,
+        msg: bytes | int | str | list[str],
+        isSimple: bool = False,
+        isError: bool = False,
     ) -> bytes:
-        if simple:
+        if isSimple:
+            if isError:
+                return f"-{msg}{CRLF}".encode(self.encoding)
             return f"+{msg}{CRLF}".encode(self.encoding)
         if type(msg) is bytes:
             return msg
@@ -88,10 +87,11 @@ class RedisServer:
         self,
         msg: bytes | int | str | list[str],
         writer: asyncio.StreamWriter,
-        simple: bool = False,
+        isSimple: bool = False,
+        isError: bool = False,
     ) -> None:
         try:
-            writer.write(self.encode_response(msg, simple))
+            writer.write(self.encode_response(msg, isSimple, isError))
             await writer.drain()
         except Exception as e:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
@@ -102,7 +102,7 @@ class RedisServer:
         print(f"Executed ECHO for {writer.get_extra_info('peername')}")
 
     async def ping(self, _command: list[str], writer: asyncio.StreamWriter) -> None:
-        await self.write(PONG, writer)
+        await self.write("PONG", writer, True)
         print(f"Executed PONG for {writer.get_extra_info('peername')}")
 
     async def set(self, command: list[str], writer: asyncio.StreamWriter) -> None:
@@ -134,7 +134,7 @@ class RedisServer:
                             )
                             idx += 1
             self.cache[command[1]] = val
-            await self.write(OK, writer)
+            await self.write("OK", writer, True)
             print(f"Executed SET for {writer.get_extra_info('peername')}")
         except Exception as e:
             print(
@@ -166,7 +166,7 @@ class RedisServer:
         key = command[1]
         if (val := self.internal_get(key)) is not None:
             if type(val) is not list:
-                await self.write(WRONG_TYPE, writer)
+                await self.write(WRONG_TYPE, writer, True, True)
                 return
             val.extend(value)
             value = val
@@ -179,7 +179,7 @@ class RedisServer:
     async def lrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if (value := self.internal_get(command[1])) is not None:
             if type(value) is not list:
-                await self.write(WRONG_TYPE, writer)
+                await self.write(WRONG_TYPE, writer, True, True)
                 return
             start, end, n = int(command[2]), int(command[3]), len(value)
             if start > n:
@@ -204,7 +204,7 @@ class RedisServer:
         key = command[1]
         if (val := self.internal_get(key)) is not None:
             if type(val) is not list:
-                await self.write(WRONG_TYPE, writer)
+                await self.write(WRONG_TYPE, writer, True, True)
                 return
             value.extend(val)
         self.cache[key] = {"value": value}
@@ -217,7 +217,7 @@ class RedisServer:
         n = 0
         if (value := self.internal_get(command[1])) is not None:
             if type(value) is not list:
-                await self.write(WRONG_TYPE, writer)
+                await self.write(WRONG_TYPE, writer, True, True)
                 return
             n = len(value)
         await self.write(n, writer)
@@ -248,7 +248,7 @@ class RedisServer:
             else:
                 await self.write(NULL_STR, writer)
         else:
-            await self.write(WRONG_TYPE, writer)
+            await self.write(WRONG_TYPE, writer, True, True)
         print(f"Executed LPOP for {writer.get_extra_info('peername')}")
 
     async def blpop(self, command: list[str], writer: asyncio.StreamWriter) -> None:
@@ -263,7 +263,7 @@ class RedisServer:
         for key in command[1:]:
             if (value := self.internal_get(command[1])) is not None:
                 if type(value) is not list:
-                    await self.write(WRONG_TYPE, writer)
+                    await self.write(WRONG_TYPE, writer, True, True)
                     return
                 if len(value) > 0:
                     self.cache[key] = {"value": value[1:]}

@@ -356,12 +356,12 @@ class RedisServer:
                     stream_id = stream_id.replace("*", str(idx))
 
             # validate stream id
-            if stream_id <= val.keys()[-1]:  # type: ignore
-                await self.write(LOW_STREAM_ID, writer, True, True)
+            if stream_id < MIN_STREAM_ID:
+                await self.write(LOWER_THAN_MIN_STREAM_ID, writer, True, True)
                 print(f"Executed XADD for {writer.get_extra_info('peername')}")
                 return
-            elif stream_id < MIN_STREAM_ID:
-                await self.write(LOWER_THAN_MIN_STREAM_ID, writer, True, True)
+            elif stream_id <= val.keys()[-1]:  # type: ignore
+                await self.write(LOW_STREAM_ID, writer, True, True)
                 print(f"Executed XADD for {writer.get_extra_info('peername')}")
                 return
             value = val

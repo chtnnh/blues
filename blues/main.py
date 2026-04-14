@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 from operator import itemgetter
 from typing import Any
 
-from app.deps.pygtrie import StringTrie
-from app.utils import flatten
+from blues.deps.pygtrie import StringTrie
+from blues.utils import flatten
 
 ENCODING = "utf-8"
 NULL_STR = "$-1\r\n".encode(ENCODING)
@@ -21,7 +21,7 @@ MSG_LIMIT = 1024
 CRLF = "\r\n"
 
 
-class RedisServer:
+class BluesServer:
     def __init__(
         self,
         host: str = "localhost",
@@ -444,17 +444,28 @@ class RedisServer:
         print(f"Client {writer.get_extra_info('peername')} disconnected gracefully")
 
     async def start(self) -> None:
-        server = await asyncio.start_server(self.handle_client, self.host, self.port)
-        async with server:
-            await server.serve_forever()
+        self.server = await asyncio.start_server(
+            self.handle_client, self.host, self.port
+        )
+        async with self.server:
+            try:
+                await self.server.serve_forever()
+            except asyncio.exceptions.CancelledError:
+                # async with server automatically calls server.close() and server.wait_closer()
+                self.server.close_clients()
+
+    async def stop(self) -> None:
+        self.server.close_clients()
+        self.server.close()
+        await self.server.wait_closed()
 
 
 def main():
     # You can use print statements as follows for debugging, they'll be visible when running tests.
     print("Logs from your program will appear here!")
 
-    redis_server = RedisServer("localhost", 6379, MSG_LIMIT, ENCODING, timezone.utc)
-    asyncio.run(redis_server.start())
+    blues_server = BluesServer("localhost", 6379, MSG_LIMIT, ENCODING, timezone.utc)
+    asyncio.run(blues_server.start())
 
 
 if __name__ == "__main__":

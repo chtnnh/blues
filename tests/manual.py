@@ -1,17 +1,6 @@
 import asyncio
 
-from app.main import CRLF
-
-
-def encode_command(msg: bytes | int | str | list[str]) -> bytes:
-    if type(msg) is bytes:
-        return msg
-    if type(msg) is int:
-        return f":{msg}{CRLF}".encode("utf-8")
-    if type(msg) is list:
-        arr = "".join([f"${len(i)}{CRLF}{i}{CRLF}" for i in msg])
-        return f"*{len(msg)}{CRLF}{arr}".encode("utf-8")
-    return f"${len(msg)}{CRLF}{msg}{CRLF}".encode("utf-8")  # type: ignore
+from tests.utils import encode_command
 
 
 async def main():
@@ -25,7 +14,7 @@ async def main():
         writer.write(encode_command(command))
         await writer.drain()
         res = await reader.read(1024)
-        print(str(res))
+        print(res.decode("utf-8"))
     writer.close()
     await writer.wait_closed()
 

@@ -538,11 +538,14 @@ class BluesServer:
             # TODO: support block
             key_idx = stream_idx[0] + idx + 1  # idx starts from 0
             start_idx = key_idx + keys
-            com = ["XREAD", command[key_idx], f"({command[start_idx]}", "+"]
-            items.append(await self.internal_stream_get(com, writer))
+            key = command[key_idx]
+            com = ["XREAD", key, f"({command[start_idx]}", "+"]
+            items.append([key, await self.internal_stream_get(com, writer)])
 
-        if count != -1 and count < len(items[0]):
-            items[0] = items[0][:count]
+        if count != -1:
+            for idx in range(len(items)):
+                if count < len(items[idx]):
+                    items[idx][1] = items[idx][1][:count]
 
         await self.write(items, writer)
         print(f"Executed XREAD for {writer.get_extra_info('peername')}")

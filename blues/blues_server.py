@@ -413,38 +413,36 @@ class BluesServer:
         await self.write(stream_id, writer)
         print(f"Executed XADD for {writer.get_extra_info('peername')}")
 
-    async def xrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
-        if (args := len(command)) > 6 or args == 5 or args < 4:
-            await self.write(
-                const.WRONG_NUMBER_OF_ARGS.replace("*", "xrange"), writer, True, True
-            )
-            print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
-            return
-
+    async def internal_stream_get(
+        self, command: list[str], writer: asyncio.StreamWriter
+    ) -> list[Any]:
         key = command[1]
         val = self.internal_get(key)
 
         if val is None:
             # return empty array if key not found
             await self.write([], writer)
-            print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
-            return
+            print(
+                f"Executed {command[0].upper()} for {writer.get_extra_info('peername')}"
+            )
+            return []
 
         items = val.items()
 
         if command[2] == "-":
             start = 0
         elif command[2][0] == "(":
-            # TODO: figure out why you need + 1 here
-            start = bisect_right(items, command[2][1:], key=itemgetter(0)) + 1
+            start = bisect_right(items, command[2][1:], key=itemgetter(0))
         else:
             start = bisect_left(items, command[2], key=itemgetter(0))
 
         if start == len(items):
             # return empty array if start greater than all stream ids
             await self.write([], writer)
-            print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
-            return
+            print(
+                f"Executed {command[0].upper()} for {writer.get_extra_info('peername')}"
+            )
+            return []
 
         # Python slicing is exclusive
         if command[3] == "+":
@@ -455,12 +453,99 @@ class BluesServer:
             end = bisect_right(items, command[3], key=itemgetter(0))
 
         items = [[item[0], flatten(item[1].items())] for item in items[start:end]]
+        return items
+
+    async def xrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if (args := len(command)) > 6 or args % 2 != 0 or args < 4:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "xrange"), writer, True, True
+            )
+            print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
+            return
+
+        items = await self.internal_stream_get(command, writer)
 
         if len(command) == 6:
-            items = items[: int(command[5])]
+            try:
+                count = int(command[5])
+                if count < len(items):
+                    items = items[:count]
+            except ValueError:
+                await self.write(const.WRONG_COUNT_TYPE, writer, True, True)
+                print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
+                return
 
         await self.write(items, writer)
         print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
+
+    async def xread(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        # TODO: support + as start
+        if (args := len(command)) < 4:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "xread"), writer, True, True
+            )
+            print(f"Executed XREAD for {writer.get_extra_info('peername')}")
+            return
+        elif args % 2 != 0:
+            await self.write(const.INVALID_COMMAND, writer, True, True)
+            print(f"Executed XREAD for {writer.get_extra_info('peername')}")
+            return
+
+        count = -1
+        block = -1
+
+        count_idx = [
+            idx for idx, token in enumerate(command) if token.lower() == "count"
+        ]
+        if (counts := len(count_idx)) > 1:
+            await self.write(const.INVALID_COMMAND, writer, True, True)
+            print(f"Executed XREAD for {writer.get_extra_info('peername')}")
+            return
+        elif counts == 1:
+            try:
+                count = int(command[count_idx[0] + 1])
+            except ValueError:
+                await self.write(const.WRONG_COUNT_TYPE, writer, True, True)
+                print(f"Executed XREAD for {writer.get_extra_info('peername')}")
+                return
+
+        block_idx = [
+            idx for idx, token in enumerate(command) if token.lower() == "block"
+        ]
+        if (blocks := len(block_idx)) > 1:
+            await self.write(const.INVALID_COMMAND, writer, True, True)
+            print(f"Executed XREAD for {writer.get_extra_info('peername')}")
+            return
+        elif blocks == 1:
+            try:
+                block = int(command[block_idx[0] + 1])
+            except ValueError:
+                await self.write(const.WRONG_COUNT_TYPE, writer, True, True)
+                print(f"Executed XREAD for {writer.get_extra_info('peername')}")
+                return
+
+        stream_idx = [
+            idx for idx, token in enumerate(command) if token.lower() == "streams"
+        ]
+        if len(stream_idx) != 1:
+            await self.write(const.INVALID_COMMAND, writer, True, True)
+            print(f"Executed XREAD for {writer.get_extra_info('peername')}")
+            return
+
+        keys = int((args - stream_idx[0] - 1) / 2)
+        items = []
+        for idx in range(keys):
+            # TODO: support block
+            key_idx = stream_idx[0] + idx + 1  # idx starts from 0
+            start_idx = key_idx + keys
+            com = ["XREAD", command[key_idx], f"({command[start_idx]}", "+"]
+            items.append(await self.internal_stream_get(com, writer))
+
+        if count != -1 and count < len(items[0]):
+            items[0] = items[0][:count]
+
+        await self.write(items, writer)
+        print(f"Executed XREAD for {writer.get_extra_info('peername')}")
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

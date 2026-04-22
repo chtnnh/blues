@@ -678,20 +678,17 @@ class BluesServer:
     async def blxread_helper(
         self, key: str, stream_id: str, stream: dict[Any, Any]
     ) -> None:
-        print("entered blxread helper")
         # NOTE: dict.keys() returns a dictview and changes when the underlying dict changes
         queue = self.blxread_queue.get(key, [])
-        print(queue)
         for writer in queue:
             try:
                 await self.write(
-                    [key, [stream_id, flatten(list(stream.items()))]], writer
+                    [[key, [stream_id, flatten(list(stream.items()))]]], writer
                 )
                 # queue is a shallow copy (copy by reference)
                 queue.remove(writer)
             except Exception:
                 continue
-        print("exited blxread helper")
 
     def _are_all_streams_empty(self, it_streams: list[Any]) -> bool:
         """

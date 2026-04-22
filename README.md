@@ -1,60 +1,42 @@
-[![progress-banner](https://backend.codecrafters.io/progress/redis/76749840-8f49-4d57-8a31-a2a0af6c7faf)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# blues
 
-This is a starting point for Python solutions to the
-["Build Your Own Redis" Challenge](https://codecrafters.io/challenges/redis).
+_redis_ subset in python3
 
-In this challenge, you'll build a toy Redis clone that's capable of handling
-basic commands like `PING`, `SET` and `GET`. Along the way we'll learn about
-event loops, the Redis protocol and more.
+0 AI. Check out ["Build Your Own Redis" Challenge](https://codecrafters.io/challenges/redis) to do something similar!
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+### Motivation
+1. get some additional practice with async programming in python3
+2. get better with pytest-asyncio and hypothesis
+3. (some) learning on data structures and redis internals
 
-# Passing the first stage
+### What's done
+1. Blues Stanza Protocol (RESP2 compatible)
+2. Blues Server (async), (strings, lists, streams) TODO: list implemented commands
+3. Blues Client (async)
+4. Blues CLI Client (async), mostly for manual testing, but pretty functional
 
-The entry point for your Redis implementation is in `app/main.py`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
+### What's coming
+1. Transactions
+2. Optimistic Locking
+3. Replication
+4. Persistence
+5. More if I can finish the above before the free challenge changes
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
-```
+### Dev Tools
+1. [uv](https://docs.astral.sh/uv/)
+2. [pytest](https://docs.pytest.org/en/stable/)
+3. [hypothesis](https://hypothesis.readthedocs.io/en/latest/)
+4. [Zed](https://zed.dev/)
 
-That's all!
+### Attribution and Thanks
+1. ["Build Your Own Redis" Challenge](https://codecrafters.io/challenges/redis)
+2. [StringTrie implementation](https://github.com/mina86/pygtrie/)
 
-# Stage 2 & beyond
+### License
+[Apache 2.0](LICENSE)
 
-Note: This section is for stages 2 and beyond.
+### Author
+© Chaitanya Mittal, 2026
 
-1. Ensure you have `uv` installed locally
-1. Run `./your_program.sh` to run your Redis server, which is implemented in
-   `app/main.py`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
-
-# Troubleshooting
-
-## module `socket` has no attribute `create_server`
-
-When running your server locally, you might see an error like this:
-
-```
-Traceback (most recent call last):
-  File "/.../python3.7/runpy.py", line 193, in _run_module_as_main
-    "__main__", mod_spec)
-  File "/.../python3.7/runpy.py", line 85, in _run_code
-    exec(code, run_globals)
-  File "/app/app/main.py", line 11, in <module>
-    main()
-  File "/app/app/main.py", line 6, in main
-    s = socket.create_server(("localhost", 6379), reuse_port=True)
-AttributeError: module 'socket' has no attribute 'create_server'
-```
-
-This is because `socket.create_server` was introduced in Python 3.8, and you
-might be running an older version.
-
-You can fix this by installing Python 3.8 locally and using that.
-
-If you'd like to use a different version of Python, change the `buildpack` value
-in `codecrafters.yml`.
+### Notice
+Reach out if I have missed out an attribution or something needs to be removed! No harm intended.

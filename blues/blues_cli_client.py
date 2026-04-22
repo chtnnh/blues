@@ -119,7 +119,7 @@ class BluesCliClient(BluesAsyncClient):
 
     async def command(self) -> AcceptedMessageTypes:
         user_input = input("$ ")
-        if user_input.lower() == "exit":
+        if user_input.lower() == "exit" or user_input == "":
             raise KeyboardInterrupt
 
         lexer = shlex(user_input, punctuation_chars=True)

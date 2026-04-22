@@ -683,7 +683,7 @@ class BluesServer:
         for writer in queue:
             try:
                 await self.write(
-                    [[key, [stream_id, flatten(list(stream.items()))]]], writer
+                    [[key, [[stream_id, flatten(list(stream.items()))]]]], writer
                 )
                 # queue is a shallow copy (copy by reference)
                 queue.remove(writer)

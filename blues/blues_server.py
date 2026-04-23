@@ -723,7 +723,7 @@ class BluesServer:
             try:
                 stream = self._internal_stream_get(["xread", key, f"({stream_id}", "+"])
                 if len(stream) != 0:
-                    await self.write(stream[:1], writer)
+                    await self.write([[key, stream[:1]]], writer)
                     self.blocked_writers[writer].set()
                     # queue is a shallow copy (copy by reference)
                     queue.remove((writer, stream_id))

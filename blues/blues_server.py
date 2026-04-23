@@ -161,7 +161,7 @@ class BluesServer:
         if self.master is None:
             await self.write("role:master", writer)
         else:
-            await self.write(["role:slave", f"master:{self.master[1]}"], writer)
+            await self.write("role:slave", writer)
         print(f"Executed INFO for {writer.get_extra_info('peername')}")
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:

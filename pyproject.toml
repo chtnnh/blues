@@ -3,6 +3,30 @@ name = "blues"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = []
+authors = [
+  { name="Chaitanya Mittal", email="hello@chtnnhfoundation.org" },
+]
+description = "single-threaded redis (subset) in async python3"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+
+[project.urls]
+Homepage = "https://github.com/chtnnh/blues"
+Issues = "https://github.com/chtnnh/blues/issues"
+
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

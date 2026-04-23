@@ -5,29 +5,37 @@ from operator import itemgetter
 from random import choice
 from string import ascii_letters, digits
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import blues.constants as const
+from blues.blues_async_client import BluesAsyncClient
+from blues.blues_server_config import BluesServerConfig
 from blues.deps.pygtrie import StringTrie
 from blues.utils import flatten
 
 
 class BluesServer:
-    def __init__(
-        self,
-        host: str = const.HOST,
-        port: int = const.PORT,
-        msg_size: int = const.MSG_LIMIT,
-        encoding: str = const.ENCODING,
-        timezone: ZoneInfo = const.DEFAULT_TZ,
-        replica_of: str = "",
-    ) -> None:
-        self.host = host
-        self.port = port
-        self.msg_size = msg_size
-        self.encoding = encoding
-        self.timezone = timezone
-        self.replica_of = replica_of
+    _constructed_via_factory = False
+
+    def __init__(self, config: BluesServerConfig) -> None:
+        if not getattr(self, "_constructed_via_factory", False):
+            raise RuntimeError("Use 'await BluesServer.create(...)'")
+
+        self.host = config.host
+        self.port = config.port
+        self.msg_size = config.msg_size
+        self.encoding = config.encoding
+        self.timezone = config.timezone
+        self.replica_of = config.replica_of
+
+        if config.replica_of != "":
+            master_host, master_port = config.replica_of.split()
+            self.master_host, self.master_port = master_host, int(master_port)
+            self.master = BluesAsyncClient(self.master_host, self.master_port)
+        else:
+            self.master_host = None
+            self.master_port = None
+            self.master = None
+
         self.repl_id = "".join(choice(ascii_letters + digits) for _ in range(40))
         self.master_repl_offset = 0
 
@@ -48,6 +56,35 @@ class BluesServer:
         self.watch_events: dict[
             asyncio.StreamWriter, list[tuple[asyncio.Event, str]]
         ] = {}
+
+    @classmethod
+    async def create(cls, config: BluesServerConfig) -> BluesServer:
+        self = cls.__new__(cls)
+        self._constructed_via_factory = True
+        cls.__init__(self, config)
+
+        if self.master is not None:
+            await self.master.create()
+            await self._connect_to_master()
+
+        return self
+
+    async def _connect_to_master(self) -> None:
+        if self.master is None:
+            raise RuntimeError("Cannot call _connect_to_master without master")
+
+        # TODO: psync
+        commands = [
+            (["PING"], "PONG"),
+            (["REPLCONF"], "OK"),
+            (["REPLCONF"], "OK"),
+            (["PSYNC", "repl-id", "offset"], "OK"),
+        ]
+        for command, expected in commands:
+            await self.master.write(command)
+            res = await self.master.read()
+            if res != expected:
+                raise RuntimeError("Error connecting to master")
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -176,6 +213,27 @@ class BluesServer:
 
         await self.write(const.CRLF.join(info_data), writer)
         print(f"Executed INFO for {writer.get_extra_info('peername')}")
+
+    async def replconf(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if len(command) != 1:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "replconf"), writer, True, True
+            )
+            print(f"Error executing REPLCONF for {writer.get_extra_info('peername')}")
+            return
+        await self.write("OK", writer)
+        print(f"Executed REPLCONF for {writer.get_extra_info('peername')}")
+
+    async def psync(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if len(command) != 3:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "psync"), writer, True, True
+            )
+            print(f"Error executing PSYNC for {writer.get_extra_info('peername')}")
+            return
+        # TODO
+        await self.write("OK", writer)
+        print(f"Executed PSYNC for {writer.get_extra_info('peername')}")
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if len(command) != 2 or command[1] == "":

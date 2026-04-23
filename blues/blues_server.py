@@ -660,15 +660,16 @@ class BluesServer:
 
             key = command[key_idx]
             start = command[start_idx]
-            stream_ids.append(start)
 
             if start == "$":
                 items.append([key, []])
+                stream_ids.append("+")
             else:
                 # _internal_stream_get already handles +
                 # because (+ returns the last stream id
                 com = ["XREAD", key, f"({start}", "+"]
                 items.append([key, self._internal_stream_get(com)])
+                stream_ids.append(start)
 
             tmp_keys.append(key)
 

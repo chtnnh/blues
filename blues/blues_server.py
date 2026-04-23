@@ -23,13 +23,15 @@ class BluesServer:
         self.msg_size = msg_size
         self.encoding = encoding
         self.timezone = timezone
-        self.cache: dict[
-            str, dict[str, Any]
-        ] = {}  # TODO: research common time complexity and actual redis DS
-        self.blpop_queue: dict[
-            str, list[asyncio.StreamWriter]
-        ] = {}  # TODO: implement key based ordering
+
+        # TODO: research common time complexity and actual redis DS
+        self.cache: dict[str, dict[str, Any]] = {}
+
+        # TODO: implement key based ordering
+        self.blpop_queue: dict[str, list[asyncio.StreamWriter]] = {}
+
         self.blxread_queue: dict[str, list[asyncio.StreamWriter]] = {}
+        self.blocked_writers: dict[asyncio.StreamWriter, asyncio.Event] = {}
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -344,8 +346,6 @@ class BluesServer:
 
     async def blpop(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         # BLPOP key [key...] timeout
-        entry = datetime.now(self.timezone)
-
         try:
             timeout = float(command[-1])
             command.pop()
@@ -369,24 +369,26 @@ class BluesServer:
             queue.append(writer)
             self.blpop_queue[key] = queue
 
+        written = asyncio.Event()
+        self.blocked_writers[writer] = written
+
         # timeout
-        while timeout == 0 or (
-            datetime.now(self.timezone) - entry < timedelta(seconds=timeout)
-        ):
-            await asyncio.sleep(0)
-        else:
-            written = False
+        timeout = None if timeout == 0 else timeout
+        try:
+            await asyncio.wait_for(written.wait(), timeout)
+        except TimeoutError:
+            pass
 
-            # third pass to remove BLPOPs
-            for key in command[1:]:
-                try:
-                    self.blpop_queue[key].remove(writer)
-                except ValueError:
-                    # set written to True to prevent double-writing to client
-                    written = True
+        self.blocked_writers.pop(writer, None)
+        # third pass to remove BLPOPs
+        for key in command[1:]:
+            try:
+                self.blpop_queue[key].remove(writer)
+            except ValueError:
+                continue
 
-            if not written:
-                await self.write(const.NULL_ARR, writer)
+        if not written.is_set():
+            await self.write(const.NULL_ARR, writer)
 
         print(f"Executed BLPOP for {writer.get_extra_info('peername')}")
 
@@ -398,6 +400,7 @@ class BluesServer:
             try:
                 await self.write([key, self.cache[key]["value"][0]], writer)
                 self._internal_lpop(["lpop", key])
+                self.blocked_writers[writer].set()
                 # queue is a shallow copy (copy by reference)
                 queue.remove(writer)
                 break
@@ -562,7 +565,6 @@ class BluesServer:
 
     async def xread(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         # supports incomplete ids because _internal_stream_get uses bisect search on StringTrie
-        entry = datetime.now(self.timezone)
         if (args := len(command)) < 4:
             await self.write(
                 const.WRONG_NUMBER_OF_ARGS.replace("*", "xread"), writer, True, True
@@ -640,27 +642,32 @@ class BluesServer:
         keys = tmp_keys
 
         if block != -1 and self._are_all_streams_empty(items):
+            written = asyncio.Event()
+            self.blocked_writers[writer] = written
+
             for key in keys:
                 queue = self.blxread_queue.get(key, [])
                 queue.append(writer)
                 self.blxread_queue[key] = queue
 
-            while block == 0 or (
-                datetime.now(self.timezone) - entry < timedelta(milliseconds=block)
-            ):
-                await asyncio.sleep(0)
-            else:
-                written = False
-                for key in keys:
-                    try:
-                        self.blxread_queue[key].remove(writer)
-                    except ValueError:
-                        # mark written as true if a writer is removed by blxread_helper
-                        written = True
-                if not written:
-                    await self.write(const.NULL_ARR, writer)
-                print(f"Executed XREAD for {writer.get_extra_info('peername')}")
-                return
+            timeout = None if block == 0 else block / 1000
+            try:
+                await asyncio.wait_for(written.wait(), timeout)
+            except TimeoutError:
+                pass
+
+            self.blocked_writers.pop(writer, None)
+            for key in keys:
+                try:
+                    self.blxread_queue[key].remove(writer)
+                except ValueError:
+                    continue
+
+            if not written.is_set():
+                await self.write(const.NULL_ARR, writer)
+
+            print(f"Executed XREAD for {writer.get_extra_info('peername')}")
+            return
 
         if count != -1:
             for idx in range(len(items)):
@@ -685,6 +692,7 @@ class BluesServer:
                 await self.write(
                     [[key, [[stream_id, flatten(list(stream.items()))]]]], writer
                 )
+                self.blocked_writers[writer].set()
                 # queue is a shallow copy (copy by reference)
                 queue.remove(writer)
             except Exception:

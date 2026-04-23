@@ -1,16 +1,30 @@
 import asyncio
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import typer
 
 from blues.blues_server import BluesServer
 from blues.constants import DEFAULT_TZ, ENCODING, HOST, MSG_LIMIT, PORT
 
+app = typer.Typer()
 
-def main():
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
-    print("Logs from your program will appear here!")
 
-    blues_server = BluesServer(HOST, PORT, MSG_LIMIT, ENCODING, DEFAULT_TZ)
+@app.command()
+def run(
+    host: str = HOST,
+    port: int = PORT,
+    msg_limit: int = MSG_LIMIT,
+    encoding: str = ENCODING,
+    tz_str: str = "",
+):
+    try:
+        tz = ZoneInfo(tz_str)
+    except ValueError, ZoneInfoNotFoundError:
+        tz = DEFAULT_TZ
+    blues_server = BluesServer(host, port, msg_limit, encoding, tz)
+    print(f"Starting blues server on {host}:{port}")
     asyncio.run(blues_server.start())
 
 
 if __name__ == "__main__":
-    main()
+    app()

@@ -89,6 +89,8 @@ class BluesServer:
                 await command_handler(command, writer)
             elif com == "multi":
                 await self.write(const.ERR_NESTED_MULTI, writer, True, True)
+            elif com == "watch":
+                await self.write(const.ERR_WATCH_INSIDE_MULTI, writer, True, True)
             elif com == "discard":
                 self.transactions.pop(writer, [])
                 self.internal_queue.pop(writer, [])

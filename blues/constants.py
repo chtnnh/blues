@@ -28,6 +28,7 @@ LOWER_THAN_MIN_STREAM_ID = "ERR The ID specified in XADD must be greater than 0-
 QUEUED = "QUEUED"
 ERR_NESTED_MULTI = "ERR MULTI calls can not be nested"
 ERR_OUTSIDE_MULTI = "ERR * without MULTI"
+ERR_WATCH_INSIDE_MULTI = "ERR WATCH inside MULTI is not allowed"
 
 # requires python >= 3.12
 type AcceptedMessageTypes = (

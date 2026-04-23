@@ -1,8 +1,9 @@
 import asyncio
 from bisect import bisect_left, bisect_right
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from operator import itemgetter
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import blues.constants as const
 from blues.deps.pygtrie import StringTrie
@@ -16,7 +17,7 @@ class BluesServer:
         port: int = const.PORT,
         msg_size: int = const.MSG_LIMIT,
         encoding: str = const.ENCODING,
-        timezone: timezone = timezone.utc,
+        timezone: ZoneInfo = const.DEFAULT_TZ,
     ) -> None:
         self.host = host
         self.port = port

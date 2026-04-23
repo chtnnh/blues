@@ -1,11 +1,11 @@
-from datetime import timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 HOST = "localhost"
 PORT = 6379
 ENCODING = "utf-8"
 TIMEOUT = 120.0
-DEFAULT_TZ = timezone.utc
+DEFAULT_TZ = ZoneInfo("Etc/UTC")
 MSG_LIMIT = 1024
 
 CRLF = "\r\n"

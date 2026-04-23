@@ -724,7 +724,7 @@ class BluesServer:
             return
 
         updated_val = self.cache.get(key, {})
-        updated_val["value"] = val
+        updated_val["value"] = str(val)
         self.cache[key] = updated_val
         await self.write(val, writer)
         print(f"Executed INCR for {writer.get_extra_info('peername')}")

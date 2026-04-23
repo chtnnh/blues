@@ -2,6 +2,8 @@ import asyncio
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from operator import itemgetter
+from random import choice
+from string import ascii_letters, digits
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -18,17 +20,16 @@ class BluesServer:
         msg_size: int = const.MSG_LIMIT,
         encoding: str = const.ENCODING,
         timezone: ZoneInfo = const.DEFAULT_TZ,
-        master: str = "",
+        replica_of: str = "",
     ) -> None:
         self.host = host
         self.port = port
         self.msg_size = msg_size
         self.encoding = encoding
         self.timezone = timezone
-        if master == "":
-            self.master = None
-        else:
-            self.master = tuple(master.split())
+        self.replica_of = replica_of
+        self.repl_id = "".join(choice(ascii_letters + digits) for _ in range(40))
+        self.master_repl_offset = 0
 
         # TODO: explore defaultdict as a replacement for each DS below
         # TODO: research common time complexity and actual redis DS
@@ -158,10 +159,22 @@ class BluesServer:
 
     async def info(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         # TODO: make this more comprehensive
-        if self.master is None:
-            await self.write("role:master", writer)
+        if self.replica_of == "":
+            info_data = [
+                "# Replication",
+                "role:master",
+                f"master_replid:{self.repl_id}",
+                f"master_repl_offset:{self.master_repl_offset}",
+                "",
+            ]
         else:
-            await self.write("role:slave", writer)
+            info_data = [
+                "# Replication",
+                "role:slave",
+                "",
+            ]
+
+        await self.write(const.CRLF.join(info_data), writer)
         print(f"Executed INFO for {writer.get_extra_info('peername')}")
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:

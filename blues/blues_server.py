@@ -706,6 +706,30 @@ class BluesServer:
         count = sum(map(lambda stream: len(stream[1]), it_streams))
         return count == 0
 
+    async def incr(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if len(command) != 2:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "incr"), writer, True, True
+            )
+            print(f"Executed INCR for {writer.get_extra_info('peername')}")
+            return
+
+        key = command[1]
+        val = self._internal_get(key)
+        try:
+            val = 1 if val is None else int(val) + 1
+        except ValueError:
+            await self.write(const.WRONG_TYPE, writer, True, True)
+            print(f"Executed INCR for {writer.get_extra_info('peername')}")
+            return
+
+        updated_val = self.cache.get(key, {})
+        updated_val["value"] = val
+        self.cache[key] = updated_val
+        await self.write(val, writer)
+        print(f"Executed INCR for {writer.get_extra_info('peername')}")
+        return
+
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()
         await writer.wait_closed()

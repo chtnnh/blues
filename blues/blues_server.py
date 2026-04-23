@@ -24,6 +24,7 @@ class BluesServer:
         self.encoding = encoding
         self.timezone = timezone
 
+        # TODO: explore defaultdict as a replacement for each DS below
         # TODO: research common time complexity and actual redis DS
         self.cache: dict[str, dict[str, Any]] = {}
 
@@ -34,6 +35,12 @@ class BluesServer:
         self.blocked_writers: dict[asyncio.StreamWriter, asyncio.Event] = {}
         self.transactions: dict[asyncio.StreamWriter, list[list[str]]] = {}
         self.internal_queue: dict[asyncio.StreamWriter, list[Any]] = {}
+        self.watched_keys: dict[
+            str, list[tuple[asyncio.Event, asyncio.StreamWriter]]
+        ] = {}
+        self.watch_events: dict[
+            asyncio.StreamWriter, list[tuple[asyncio.Event, str]]
+        ] = {}
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -83,7 +90,9 @@ class BluesServer:
             elif com == "multi":
                 await self.write(const.ERR_NESTED_MULTI, writer, True, True)
             elif com == "discard":
-                del self.transactions[writer]
+                self.transactions.pop(writer, [])
+                self.internal_queue.pop(writer, [])
+                self._internal_unwatch(writer)
                 await self.write("OK", writer, True)
             elif com == "exec":
                 await self.exec(command, writer)
@@ -169,6 +178,7 @@ class BluesServer:
 
     async def set(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         try:
+            key = command[1]
             val: dict[str, Any] = {"value": command[2]}
 
             if (args := len(command)) < 2:
@@ -205,9 +215,11 @@ class BluesServer:
                             )
                             idx += 1
 
-            self.cache[command[1]] = val
+            self.cache[key] = val
             await self.write("OK", writer, True)
             print(f"Executed SET for {writer.get_extra_info('peername')}")
+
+            self._notify_watchers(key, writer)
 
         except Exception as e:
             print(
@@ -262,6 +274,8 @@ class BluesServer:
         await self.write(len(value), writer)
         print(f"Executed RPUSH for {writer.get_extra_info('peername')}")
 
+        self._notify_watchers(key, writer)
+
         if self.transactions.get(writer, None) is None:
             await self.blpop_helper(key)
         else:
@@ -315,6 +329,8 @@ class BluesServer:
         await self.write(len(value), writer)
         print(f"Executed LPUSH for {writer.get_extra_info('peername')}")
 
+        self._notify_watchers(key, writer)
+
         if self.transactions.get(writer, None) is None:
             await self.blpop_helper(key)
         else:
@@ -363,6 +379,7 @@ class BluesServer:
         if pop:
             if type(pop) is not bool:
                 await self.write(pop, writer)
+                self._notify_watchers(command[1], writer)
             else:
                 await self.write(const.NULL_STR, writer)
         else:
@@ -387,6 +404,7 @@ class BluesServer:
                 if len(value) > 0:
                     self.cache[key] = {"value": value[1:]}
                     await self.write([key, value[0]], writer)
+                    self._notify_watchers(key, writer)
                     return
 
         # second pass to add BLPOPs if all lists are empty
@@ -513,6 +531,8 @@ class BluesServer:
         self.cache[key] = {"value": value}
         await self.write(stream_id, writer)
         print(f"Executed XADD for {writer.get_extra_info('peername')}")
+
+        self._notify_watchers(key, writer)
 
         if self.transactions.get(writer, None) is None:
             await self.blxread_helper(key)
@@ -748,6 +768,7 @@ class BluesServer:
 
         key = command[1]
         val = self._internal_get(key)
+
         try:
             val = 1 if val is None else int(val) + 1
         except ValueError:
@@ -759,8 +780,10 @@ class BluesServer:
         updated_val["value"] = str(val)
         self.cache[key] = updated_val
         await self.write(val, writer)
+
         print(f"Executed INCR for {writer.get_extra_info('peername')}")
-        return
+
+        self._notify_watchers(key, writer)
 
     async def multi(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if len(command) != 1:
@@ -790,12 +813,23 @@ class BluesServer:
             )
             return
 
+        events = self.watch_events.get(writer, [])
+        for modified, _ in events:
+            if modified.is_set():
+                await self.write(const.NULL_ARR, writer)
+                await self._exec_cleanup(writer)
+                return
+
         n = len(queue)
         await self.write(f"*{n}{const.CRLF}".encode(self.encoding), writer)
 
         for com in queue:
             await self.route_command(com, writer, True)
 
+        await self._exec_cleanup(writer)
+        print(f"Executed EXEC for {writer.get_extra_info('peername')}")
+
+    async def _exec_cleanup(self, writer: asyncio.StreamWriter) -> None:
         queue = self.internal_queue.get(writer, None)
         if queue is not None:
             for com, args in queue:
@@ -803,13 +837,61 @@ class BluesServer:
                 await command_handler(*args)
             del self.internal_queue[writer]
 
+        self._internal_unwatch(writer)
         del self.transactions[writer]
-        print(f"Executed EXEC for {writer.get_extra_info('peername')}")
 
     async def discard(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        # the actual discard logic sits in self.route_command
         await self.write(
             const.ERR_OUTSIDE_MULTI.replace("*", command[0].upper()), writer, True, True
         )
+
+    async def watch(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if len(command) < 2:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "watch"), writer, True, True
+            )
+            return
+
+        tmp_events = []
+        for key in command[1:]:
+            modified = asyncio.Event()
+            events = self.watched_keys.get(key, [])
+            events.append((modified, writer))
+            self.watched_keys[key] = events
+            tmp_events.append((modified, key))
+
+        events = self.watch_events.get(writer, [])
+        events.extend(tmp_events)
+        self.watch_events[writer] = events
+
+        await self.write("OK", writer, True)
+
+    def _notify_watchers(self, key: str, writer: asyncio.StreamWriter) -> None:
+        events = self.watched_keys.get(key, [])
+        for event, watching_writer in events:
+            if writer == watching_writer:
+                continue
+            event.set()
+
+    def _internal_unwatch(self, writer: asyncio.StreamWriter) -> None:
+        events = self.watch_events.pop(writer, [])
+        for event, key in events:
+            watchers = self.watched_keys.get(key, [])
+            try:
+                watchers.remove((event, writer))
+            except ValueError:
+                continue
+
+    async def unwatch(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if len(command) != 1:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "unwatch"), writer, True, True
+            )
+            return
+
+        self._internal_unwatch(writer)
+        await self.write("OK", writer, True)
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

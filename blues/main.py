@@ -16,13 +16,13 @@ def run(
     msg_limit: int = MSG_LIMIT,
     encoding: str = ENCODING,
     tz_str: str = "",
-    master: str = "",
+    replicaof: str = "",
 ):
     try:
         tz = ZoneInfo(tz_str)
     except ValueError, ZoneInfoNotFoundError:
         tz = DEFAULT_TZ
-    blues_server = BluesServer(host, port, msg_limit, encoding, tz, master)
+    blues_server = BluesServer(host, port, msg_limit, encoding, tz, replicaof)
     print(f"Starting blues server on {host}:{port}")
     asyncio.run(blues_server.start())
 

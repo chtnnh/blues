@@ -151,6 +151,10 @@ class BluesServer:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
             raise
 
+    async def info(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        # TODO: make this more comprehensive
+        await self.write("role:master", writer)
+
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if len(command) != 2 or command[1] == "":
             await self.write(

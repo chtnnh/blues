@@ -13,7 +13,7 @@ class BluesCliClient(BluesAsyncClient):
         encoding: str = ENCODING,
         timeout: float = TIMEOUT,
     ) -> None:
-        super().__init__()
+        super().__init__(host, port, encoding, timeout)
 
     def _parse_list(self, input: list[str], index: int) -> tuple[list[Any], int]:
         if input[index] != "[":

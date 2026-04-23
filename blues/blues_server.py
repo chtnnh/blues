@@ -196,18 +196,18 @@ class BluesServer:
 
     async def info(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         # TODO: make this more comprehensive
-        if self.replica_of == "":
+        if self.master:
             info_data = [
                 "# Replication",
-                "role:master",
-                f"master_replid:{self.repl_id}",
-                f"master_repl_offset:{self.master_repl_offset}",
+                "role:slave",
                 "",
             ]
         else:
             info_data = [
                 "# Replication",
-                "role:slave",
+                "role:master",
+                f"master_replid:{self.repl_id}",
+                f"master_repl_offset:{self.master_repl_offset}",
                 "",
             ]
 

@@ -81,14 +81,13 @@ class BluesStanzaProtocolAsync:
                     return []
                 return [await self.decode(reader) for _ in range(int(msg))]
             case "$" | "!":
-                # TODO: return a flag for errors
-                # don't do reader.read(int(msg)) to avoid having to drain the reader later
+                # TODO: return a flag for errorsr
                 # TODO: return a flag for null str
                 if msg == "-1":
                     return ""
-                bulk = await reader.readline()
+                bulk = await reader.read(int(msg) + 2)
                 bulk = bulk.decode(self.encoding)
-                return bulk[: int(msg)]
+                return bulk[:-2]
             case ":" | "(":
                 return int(msg)
             case ",":

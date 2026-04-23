@@ -14,13 +14,13 @@ _redis_ subset in python3
 2. Blues Server (async), (strings, lists, streams) TODO: list implemented commands
 3. Blues Client (async)
 4. Blues CLI Client (async), mostly for manual testing, but pretty functional
+5. Transactions
 
 ### What's coming
-1. Transactions
-2. Optimistic Locking
-3. Replication
-4. Persistence
-5. More if I can finish the above before the free challenge changes
+1. Optimistic Locking
+2. Replication
+3. Persistence
+4. More if I can finish the above before the free challenge changes
 
 ### Dev Tools
 1. [uv](https://docs.astral.sh/uv/)

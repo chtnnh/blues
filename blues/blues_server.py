@@ -719,7 +719,7 @@ class BluesServer:
         try:
             val = 1 if val is None else int(val) + 1
         except ValueError:
-            await self.write(const.WRONG_TYPE, writer, True, True)
+            await self.write(const.INTEGER_OUT_OF_RANGE, writer, True, True)
             print(f"Executed INCR for {writer.get_extra_info('peername')}")
             return
 

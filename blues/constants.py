@@ -19,6 +19,7 @@ UNKNOWN_COMMAND = "ERR unknown command '*'"
 INVALID_COMMAND = "ResponseError: Invalid command or syntax error"
 WRONG_NUMBER_OF_ARGS = "ERR wrong number of arguments for '*' command"
 WRONG_TYPE = "WRONGTYPE Operation against a key holding the wrong kind of value"
+INTEGER_OUT_OF_RANGE = "ERR value is not an integer or out of range"
 WRONG_COUNT_TYPE = "ERR value is not an integer or out of range"
 LOW_STREAM_ID = (
     "ERR The ID specified in XADD is equal or smaller than the target stream top item"

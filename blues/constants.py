@@ -4,7 +4,7 @@ from typing import Any
 HOST = "localhost"
 PORT = 6379
 ENCODING = "utf-8"
-TIMEOUT = 5.0
+TIMEOUT = 120.0
 DEFAULT_TZ = timezone.utc
 MSG_LIMIT = 1024
 
@@ -25,6 +25,9 @@ LOW_STREAM_ID = (
     "ERR The ID specified in XADD is equal or smaller than the target stream top item"
 )
 LOWER_THAN_MIN_STREAM_ID = "ERR The ID specified in XADD must be greater than 0-0"
+QUEUED = "QUEUED"
+ERR_NESTED_MULTI = "ERR MULTI calls can not be nested"
+ERR_OUTSIDE_MULTI = "ERR * without MULTI"
 
 # requires python >= 3.12
 type AcceptedMessageTypes = (

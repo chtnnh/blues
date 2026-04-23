@@ -30,8 +30,10 @@ class BluesServer:
         # TODO: implement key based ordering
         self.blpop_queue: dict[str, list[asyncio.StreamWriter]] = {}
 
-        self.blxread_queue: dict[str, list[asyncio.StreamWriter]] = {}
+        self.blxread_queue: dict[str, list[tuple[asyncio.StreamWriter, str]]] = {}
         self.blocked_writers: dict[asyncio.StreamWriter, asyncio.Event] = {}
+        self.transactions: dict[asyncio.StreamWriter, list[list[str]]] = {}
+        self.internal_queue: dict[asyncio.StreamWriter, list[Any]] = {}
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -67,14 +69,30 @@ class BluesServer:
         return command
 
     async def route_command(
-        self, command: list[str], writer: asyncio.StreamWriter
+        self,
+        command: list[str],
+        writer: asyncio.StreamWriter,
+        in_transaction: bool = False,
     ) -> None:
+        com = command[0].lower()
         try:
-            com = getattr(self, command[0].lower())
-            await com(command, writer)
+            queue = self.transactions.get(writer, None)
+            if queue is None or in_transaction:
+                command_handler = getattr(self, com)
+                await command_handler(command, writer)
+            elif com == "multi":
+                await self.write(const.ERR_NESTED_MULTI, writer, True, True)
+            elif com == "discard":
+                del self.transactions[writer]
+                await self.write("OK", writer, True)
+            elif com == "exec":
+                await self.exec(command, writer)
+            else:
+                queue.append(command)
+                await self.write(const.QUEUED, writer, True)
         except AttributeError:
             await self.write(
-                const.UNKNOWN_COMMAND.replace("*", command[0].lower()),
+                const.UNKNOWN_COMMAND.replace("*", com),
                 writer,
                 True,
                 True,
@@ -244,8 +262,12 @@ class BluesServer:
         await self.write(len(value), writer)
         print(f"Executed RPUSH for {writer.get_extra_info('peername')}")
 
-        # TODO: ensure atomic transactions don't execute this
-        await self.blpop_helper(key)
+        if self.transactions.get(writer, None) is None:
+            await self.blpop_helper(key)
+        else:
+            queue = self.internal_queue.get(writer, [])
+            queue.append(["blpop_helper", [key]])
+            self.internal_queue[writer] = queue
 
     async def lrange(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if (value := self._internal_get(command[1])) is not None:
@@ -293,8 +315,12 @@ class BluesServer:
         await self.write(len(value), writer)
         print(f"Executed LPUSH for {writer.get_extra_info('peername')}")
 
-        # TODO: ensure atomic transactions don't execute this
-        await self.blpop_helper(key)
+        if self.transactions.get(writer, None) is None:
+            await self.blpop_helper(key)
+        else:
+            queue = self.internal_queue.get(writer, [])
+            queue.append(["blpop_helper", [key]])
+            self.internal_queue[writer] = queue
 
     async def llen(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         n = 0
@@ -487,10 +513,15 @@ class BluesServer:
         self.cache[key] = {"value": value}
         await self.write(stream_id, writer)
         print(f"Executed XADD for {writer.get_extra_info('peername')}")
-        # TODO: ensure atomic transactions don't execute this
-        await self.blxread_helper(key, stream_id, stream)
 
-    async def _internal_stream_get(self, command: list[str]) -> list[Any]:
+        if self.transactions.get(writer, None) is None:
+            await self.blxread_helper(key)
+        else:
+            queue = self.internal_queue.get(writer, [])
+            queue.append(["blxread_helper", [key]])
+            self.internal_queue[writer] = queue
+
+    def _internal_stream_get(self, command: list[str]) -> list[Any]:
         key = command[1]
         val: StringTrie | None = self._internal_get(key)
 
@@ -542,7 +573,7 @@ class BluesServer:
             print(f"Executed XRANGE for {writer.get_extra_info('peername')}")
             return
 
-        items = await self._internal_stream_get(command)
+        items = self._internal_stream_get(command)
 
         if len(items) == 0:
             # XRANGE returns empty array even if key not found
@@ -619,6 +650,7 @@ class BluesServer:
 
         # assumes streams is the last flag (which is specified in the command syntax)
         keys = int((args - stream_idx[0] - 1) / 2)
+        stream_ids = []
         items = []
         tmp_keys = []
 
@@ -628,6 +660,7 @@ class BluesServer:
 
             key = command[key_idx]
             start = command[start_idx]
+            stream_ids.append(start)
 
             if start == "$":
                 items.append([key, []])
@@ -635,7 +668,7 @@ class BluesServer:
                 # _internal_stream_get already handles +
                 # because (+ returns the last stream id
                 com = ["XREAD", key, f"({start}", "+"]
-                items.append([key, await self._internal_stream_get(com)])
+                items.append([key, self._internal_stream_get(com)])
 
             tmp_keys.append(key)
 
@@ -645,9 +678,9 @@ class BluesServer:
             written = asyncio.Event()
             self.blocked_writers[writer] = written
 
-            for key in keys:
+            for idx, key in enumerate(keys):
                 queue = self.blxread_queue.get(key, [])
-                queue.append(writer)
+                queue.append((writer, stream_ids[idx]))
                 self.blxread_queue[key] = queue
 
             timeout = None if block == 0 else block / 1000
@@ -657,9 +690,9 @@ class BluesServer:
                 pass
 
             self.blocked_writers.pop(writer, None)
-            for key in keys:
+            for idx, key in enumerate(keys):
                 try:
-                    self.blxread_queue[key].remove(writer)
+                    self.blxread_queue[key].remove((writer, stream_ids[idx]))
                 except ValueError:
                     continue
 
@@ -682,19 +715,17 @@ class BluesServer:
         await self.write(items, writer)
         print(f"Executed XREAD for {writer.get_extra_info('peername')}")
 
-    async def blxread_helper(
-        self, key: str, stream_id: str, stream: dict[Any, Any]
-    ) -> None:
+    async def blxread_helper(self, key: str) -> None:
         # NOTE: dict.keys() returns a dictview and changes when the underlying dict changes
         queue = self.blxread_queue.get(key, [])
-        for writer in queue:
+        for writer, stream_id in queue:
             try:
-                await self.write(
-                    [[key, [[stream_id, flatten(list(stream.items()))]]]], writer
-                )
-                self.blocked_writers[writer].set()
-                # queue is a shallow copy (copy by reference)
-                queue.remove(writer)
+                stream = self._internal_stream_get(["xread", key, f"({stream_id}", "+"])
+                if len(stream) != 0:
+                    await self.write(stream[:1], writer)
+                    self.blocked_writers[writer].set()
+                    # queue is a shallow copy (copy by reference)
+                    queue.remove((writer, stream_id))
             except Exception:
                 continue
 
@@ -729,6 +760,55 @@ class BluesServer:
         await self.write(val, writer)
         print(f"Executed INCR for {writer.get_extra_info('peername')}")
         return
+
+    async def multi(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if len(command) != 1:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "multi"), writer, True, True
+            )
+            print(f"Executed MULTI for {writer.get_extra_info('peername')}")
+            return
+        self.transactions[writer] = []
+        await self.write("OK", writer, True)
+
+    async def exec(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        if len(command) != 1:
+            await self.write(
+                const.WRONG_NUMBER_OF_ARGS.replace("*", "exec"), writer, True, True
+            )
+            print(f"Executed EXEC for {writer.get_extra_info('peername')}")
+            return
+
+        queue = self.transactions.get(writer, None)
+        if queue is None:
+            await self.write(
+                const.ERR_OUTSIDE_MULTI.replace("*", command[0].upper()),
+                writer,
+                True,
+                True,
+            )
+            return
+
+        n = len(queue)
+        await self.write(f"*{n}{const.CRLF}".encode(self.encoding), writer)
+
+        for com in queue:
+            await self.route_command(com, writer, True)
+
+        queue = self.internal_queue.get(writer, None)
+        if queue is not None:
+            for com, args in queue:
+                command_handler = getattr(self, com)
+                await command_handler(*args)
+            del self.internal_queue[writer]
+
+        del self.transactions[writer]
+        print(f"Executed EXEC for {writer.get_extra_info('peername')}")
+
+    async def discard(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        await self.write(
+            const.ERR_OUTSIDE_MULTI.replace("*", command[0].upper()), writer, True, True
+        )
 
     async def disconnect_client(self, writer: asyncio.StreamWriter) -> None:
         writer.close()

@@ -84,7 +84,9 @@ class BluesServer:
             await self.master.write(command)
             res = await self.master.read()
             if res != expected:
-                raise RuntimeError("Error connecting to master")
+                raise RuntimeError(
+                    f"Error connecting to master: expected {expected} for {command}, got {res}"
+                )
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter

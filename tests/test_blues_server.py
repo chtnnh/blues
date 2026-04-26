@@ -5,6 +5,7 @@ from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from blues.blues_async_client import BluesAsyncClient
+from blues.blues_server_config import BluesServerConfig
 from blues.bluessp import BluesStanzaProtocolAsync
 from blues.constants import WRONG_NUMBER_OF_ARGS
 from blues.main import BluesServer
@@ -12,7 +13,8 @@ from blues.main import BluesServer
 
 @pytest.fixture(autouse=True)
 async def blues_server():
-    blues_server = BluesServer()
+    config = BluesServerConfig()
+    blues_server = BluesServer(config)
     asyncio.create_task(blues_server.start())
     yield blues_server
     await blues_server.stop()

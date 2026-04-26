@@ -38,6 +38,7 @@ class BluesServer:
 
         self.repl_id = "".join(choice(ascii_letters + digits) for _ in range(40))
         self.master_repl_offset = 0
+        self.replicas: dict[int, dict[Any, Any]] = {}
 
         # TODO: explore defaultdict as a replacement for each DS below
         # TODO: research common time complexity and actual redis DS
@@ -76,8 +77,8 @@ class BluesServer:
         # TODO: psync
         commands = [
             (["PING"], "PONG"),
-            # (["REPLCONF"], "OK"),
-            # (["REPLCONF"], "OK"),
+            (["REPLCONF", "listening-port", f"{self.port}"], "OK"),
+            (["REPLCONF", "capa", "psync2"], "OK"),
             # (["PSYNC", "repl-id", "offset"], "OK"),
         ]
         for command, expected in commands:
@@ -217,12 +218,19 @@ class BluesServer:
         print(f"Executed INFO for {writer.get_extra_info('peername')}")
 
     async def replconf(self, command: list[str], writer: asyncio.StreamWriter) -> None:
-        if len(command) != 1:
-            await self.write(
-                const.WRONG_NUMBER_OF_ARGS.replace("*", "replconf"), writer, True, True
-            )
-            print(f"Error executing REPLCONF for {writer.get_extra_info('peername')}")
-            return
+        try:
+            port = int(command[command.index("listening-port") + 1])
+        except ValueError:
+            port = writer.get_extra_info("peername")[1]
+
+        capabilities = [
+            command[int(idx) + 1] for idx, flag in enumerate(command) if flag == "capa"
+        ]
+        replica = self.replicas.get(port, {})
+        val = replica.get("capabilities", [])
+        # update by reference
+        val.extend(capabilities)
+
         await self.write("OK", writer)
         print(f"Executed REPLCONF for {writer.get_extra_info('peername')}")
 

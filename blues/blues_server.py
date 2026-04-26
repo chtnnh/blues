@@ -79,11 +79,16 @@ class BluesServer:
             (["PING"], "PONG"),
             (["REPLCONF", "listening-port", f"{self.port}"], "OK"),
             (["REPLCONF", "capa", "psync2"], "OK"),
-            # (["PSYNC", "repl-id", "offset"], "OK"),
+            (["PSYNC", "?", "-1"], "FULLRESYNC"),
         ]
         for command, expected in commands:
             await self.master.write(command)
             res = await self.master.read()
+
+            # TODO: make this more comprehensive
+            if "PSYNC" in command:
+                res = res.split()[0]  # type: ignore
+
             if res != expected:
                 raise RuntimeError(
                     f"Error connecting to master: expected {expected} for {command}, got {res}"
@@ -241,8 +246,20 @@ class BluesServer:
             )
             print(f"Error executing PSYNC for {writer.get_extra_info('peername')}")
             return
-        # TODO
-        await self.write("OK", writer)
+
+        try:
+            repl_id, offset = command[1], int(command[2])
+        except ValueError:
+            await self.write(const.INVALID_COMMAND, writer, True, True)
+            print(f"Error executing PSYNC for {writer.get_extra_info('peername')}")
+            return
+
+        if repl_id == "?":
+            await self.write(f"FULLRESYNC {self.repl_id} 0", writer, True)
+        else:
+            await self.write(
+                f"PSYNC {self.repl_id} {self.master_repl_offset - offset}", writer, True
+            )
         print(f"Executed PSYNC for {writer.get_extra_info('peername')}")
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:

@@ -76,8 +76,8 @@ class BluesServer:
         # TODO: psync
         commands = [
             (["PING"], "PONG"),
-            (["REPLCONF"], "OK"),
-            (["REPLCONF"], "OK"),
+            # (["REPLCONF"], "OK"),
+            # (["REPLCONF"], "OK"),
             (["PSYNC", "repl-id", "offset"], "OK"),
         ]
         for command, expected in commands:

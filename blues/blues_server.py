@@ -236,7 +236,7 @@ class BluesServer:
         # update by reference
         val.extend(capabilities)
 
-        await self.write("OK", writer)
+        await self.write("OK", writer, True)
         print(f"Executed REPLCONF for {writer.get_extra_info('peername')}")
 
     async def psync(self, command: list[str], writer: asyncio.StreamWriter) -> None:

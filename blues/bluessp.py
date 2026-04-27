@@ -3,10 +3,14 @@ import asyncio
 from blues.constants import CRLF, ENCODING, AcceptedMessageTypes
 
 
+class BluesSPDecodeError(Exception):
+    def __init__(self, message: str = "Failed to decode from reader.") -> None:
+        super().__init__(message)
+
+
 class BluesStanzaProtocolAsync:
     def __init__(self, encoding: str = ENCODING) -> None:
         self.encoding = encoding
-        return
 
     def encode(
         self,
@@ -70,38 +74,90 @@ class BluesStanzaProtocolAsync:
 
         return command.encode(self.encoding)
 
-    async def decode(self, reader: asyncio.StreamReader) -> AcceptedMessageTypes:
+    async def decode(
+        self, reader: asyncio.StreamReader
+    ) -> tuple[AcceptedMessageTypes, bool, bool, bool]:
+        """
+        Decode bytes array from reader to accepted message types using Blues Stanza Protocol.
+
+        Handles None, bool, int, float, str, list[Any], dict[Any, Any].
+        Also supports simple string, simple error, bulk error, null string and null array.
+
+        Returns: res, error, is_null, is_error
+        """
+
+        error = False
+        is_null = False
+        is_error = False
+
         data = await reader.readline()
+        if not data:
+            error = True
+            return None, error, is_null, is_error
+
         data = data.decode(self.encoding)
+
         msg_type, msg = data[:1], data[1:-2]
+
         match msg_type:
             case "*":
-                # TODO: return a flag for null arr
+                res = []
                 if msg == "-1":
-                    return []
-                return [await self.decode(reader) for _ in range(int(msg))]
+                    is_null = True
+                else:
+                    for _ in range(int(msg)):
+                        # TODO: handle, is_null and is_error
+                        item, err, *_ = await self.decode(reader)
+                        if err:
+                            raise BluesSPDecodeError
+                        res.append(item)
+
             case "$" | "!":
-                # TODO: return a flag for errorsr
-                # TODO: return a flag for null str
+                if msg_type == "!":
+                    is_error = True
+
                 if msg == "-1":
-                    return ""
-                bulk = await reader.read(int(msg) + 2)
-                bulk = bulk.decode(self.encoding)
-                return bulk[:-2]
+                    is_null = True
+                    res = ""
+
+                else:
+                    bulk = await reader.read(int(msg) + 2)
+                    bulk = bulk.decode(self.encoding)
+                    res = bulk[:-2]
+
             case ":" | "(":
-                return int(msg)
+                res = int(msg)
+
             case ",":
-                return float(msg)
-            case "+" | "-":
-                # TODO: return a flag for errors
-                return msg
+                res = float(msg)
+
+            case "+":
+                res = msg
+
+            case "-":
+                is_error = True
+                res = msg
+
             case "_":
-                return None
+                is_null = True
+                res = None
+
             case "#":
-                return msg == "t"
+                res = msg == "t"
+
             case "%":
                 res = {}
                 for _ in range(int(msg)):
-                    key = await self.decode(reader)
-                    res[key] = await self.decode(reader)
-                return res
+                    # TODO: handle is_null and is_error
+                    key, err, *_ = await self.decode(reader)
+                    if err:
+                        raise BluesSPDecodeError
+                    res[key], err, *_ = await self.decode(reader)
+                    if err:
+                        raise BluesSPDecodeError
+
+            case _:
+                res = None
+                error = True
+
+        return res, error, is_null, is_error

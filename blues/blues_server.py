@@ -342,8 +342,8 @@ class BluesServer:
 
     async def _count_updated_replicas(self, previous_offset: int = 0) -> int:
         current_offset = self.master_repl_offset
-        if current_offset == previous_offset:
-            return len(self.replicas)
+        # if current_offset == previous_offset:
+        #     return len(self.replicas)
 
         count = 0
 

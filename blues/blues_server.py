@@ -41,6 +41,7 @@ class BluesServer:
 
         self.repl_id = "".join(choice(ascii_letters + digits) for _ in range(40))
         self.master_repl_offset = 0
+        self.replica_repl_offset = 0
         self.replicas: dict[str, dict[str, Any]] = {}
 
         # TODO: explore defaultdict as a replacement for each DS below
@@ -115,11 +116,14 @@ class BluesServer:
                 command, error, is_null, is_error = await self.bluessp.decode(
                     self.master.reader
                 )
+
                 if command is None and error:
                     # disconnect master
                     break
                 elif not isinstance(command, list) or error or is_error or is_null:
                     print(f"INVALID COMMAND: {command} sent by {client}")
+
+                self.replica_repl_offset += len(self.bluessp.encode(command))
 
                 print(f"Routing command for {client}")
                 await self.route_command(command, self.master.writer)  # type: ignore
@@ -238,6 +242,19 @@ class BluesServer:
     async def replconf(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         set_writer = False
         host = ":".join([str(info) for info in writer.get_extra_info("peername")[:2]])
+        command = [com.lower() for com in command]
+
+        try:
+            offset = command[command.index("getack") + 1]
+            if offset == "*":
+                await self.write(
+                    ["REPLCONF", "ACK", f"{self.replica_repl_offset}"],
+                    writer,
+                    to_master=True,
+                )
+            return
+        except ValueError:
+            pass
 
         try:
             port = int(command[command.index("listening-port") + 1])
@@ -291,10 +308,13 @@ class BluesServer:
 
     async def _propagate_to_replicas(self, command: list[str]) -> None:
         # TODO: add buffering
+        com = self.bluessp.encode(command)
+        self.master_repl_offset += len(com)
+
         for replica in list(self.replicas.values()):
             writer = replica.get("writer", None)
             if writer is not None:
-                writer.write(self.bluessp.encode(command))
+                writer.write(com)
                 await writer.drain()
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:

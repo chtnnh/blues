@@ -33,7 +33,8 @@ class BluesStanzaProtocolAsync:
         elif isSimple:
             if isError:
                 command = f"-{msg}{CRLF}"
-            command = f"+{msg}{CRLF}"
+            else:
+                command = f"+{msg}{CRLF}"
 
         else:
             match msg:

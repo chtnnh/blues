@@ -41,7 +41,7 @@ class BluesServer:
 
         self.repl_id = "".join(choice(ascii_letters + digits) for _ in range(40))
         self.master_repl_offset = 0
-        self.replicas: dict[int, dict[Any, Any]] = {}
+        self.replicas: dict[str, dict[str, Any]] = {}
 
         # TODO: explore defaultdict as a replacement for each DS below
         # TODO: research common time complexity and actual redis DS
@@ -96,12 +96,40 @@ class BluesServer:
                     )
                 # read rdb
                 res = await self.master.read_rdb()
+                asyncio.create_task(self.replication_handler())
                 return
 
             if res != expected:
                 raise RuntimeError(
                     f"Error connecting to master: expected {expected} for {command}, got {res}"
                 )
+
+    async def replication_handler(self) -> None:
+        if self.master is None:
+            raise RuntimeError("Cannot call replication_handler without master")
+
+        client = self.master.writer.get_extra_info("peername")
+
+        try:
+            while True:
+                command, error, is_null, is_error = await self.bluessp.decode(
+                    self.master.reader
+                )
+                if command is None and error:
+                    # disconnect master
+                    break
+                elif not isinstance(command, list) or error or is_error or is_null:
+                    print(f"INVALID COMMAND: {command} sent by {client}")
+
+                print(f"Routing command for {client}")
+                await self.route_command(command, self.master.writer)  # type: ignore
+
+        except ConnectionError, BrokenPipeError:
+            print(f"Client {client} disconnected unexpectedly")
+
+        finally:
+            # TODO: figure out if replica needs to shutdown if connection with master is lost
+            await self.disconnect_client(self.master.writer)
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -174,7 +202,12 @@ class BluesServer:
         writer: asyncio.StreamWriter,
         isSimple: bool = False,
         isError: bool = False,
+        to_master: bool = False,
     ) -> None:
+        if not to_master and self.master is not None and writer == self.master.writer:
+            # dont respond to master!
+            return
+
         try:
             writer.write(self.bluessp.encode(msg, isSimple, isError))
             await writer.drain()
@@ -203,18 +236,28 @@ class BluesServer:
         print(f"Executed INFO for {writer.get_extra_info('peername')}")
 
     async def replconf(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        set_writer = False
+        host = ":".join([str(info) for info in writer.get_extra_info("peername")[:2]])
+
         try:
             port = int(command[command.index("listening-port") + 1])
+            set_writer = True
         except ValueError:
-            port = writer.get_extra_info("peername")[1]
+            pass
 
         capabilities = [
             command[int(idx) + 1] for idx, flag in enumerate(command) if flag == "capa"
         ]
-        replica = self.replicas.get(port, {})
+        replica = self.replicas.get(host, {})
         val = replica.get("capabilities", [])
-        # update by reference
         val.extend(capabilities)
+
+        replica["capabilities"] = val
+        if set_writer:
+            replica["writer"] = writer
+            replica["port"] = port  # type: ignore
+
+        self.replicas[host] = replica
 
         await self.write("OK", writer, True)
         print(f"Executed REPLCONF for {writer.get_extra_info('peername')}")
@@ -245,6 +288,14 @@ class BluesServer:
                 f"PSYNC {self.repl_id} {self.master_repl_offset - offset}", writer, True
             )
         print(f"Executed PSYNC for {writer.get_extra_info('peername')}")
+
+    async def _propagate_to_replicas(self, command: list[str]) -> None:
+        # TODO: add buffering
+        for replica in list(self.replicas.values()):
+            writer = replica.get("writer", None)
+            if writer is not None:
+                writer.write(self.bluessp.encode(command))
+                await writer.drain()
 
     async def echo(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if len(command) != 2 or command[1] == "":
@@ -318,6 +369,7 @@ class BluesServer:
             print(f"Executed SET for {writer.get_extra_info('peername')}")
 
             self._notify_watchers(key, writer)
+            await self._propagate_to_replicas(command)
 
         except Exception as e:
             print(
@@ -373,6 +425,9 @@ class BluesServer:
         print(f"Executed RPUSH for {writer.get_extra_info('peername')}")
 
         self._notify_watchers(key, writer)
+        # TODO: figure out how this behaves with transactions
+        # and what the correct behavior would be
+        await self._propagate_to_replicas(command)
 
         if self.transactions.get(writer, None) is None:
             await self.blpop_helper(key)
@@ -428,6 +483,9 @@ class BluesServer:
         print(f"Executed LPUSH for {writer.get_extra_info('peername')}")
 
         self._notify_watchers(key, writer)
+        # TODO: figure out how this behaves with transactions
+        # and what the correct behavior would be
+        await self._propagate_to_replicas(command)
 
         if self.transactions.get(writer, None) is None:
             await self.blpop_helper(key)
@@ -478,6 +536,7 @@ class BluesServer:
             if type(pop) is not bool:
                 await self.write(pop, writer)
                 self._notify_watchers(command[1], writer)
+                await self._propagate_to_replicas(command)
             else:
                 await self.write(const.NULL_STR, writer)
         else:
@@ -503,6 +562,7 @@ class BluesServer:
                     self.cache[key] = {"value": value[1:]}
                     await self.write([key, value[0]], writer)
                     self._notify_watchers(key, writer)
+                    await self._propagate_to_replicas(command)
                     return
 
         # second pass to add BLPOPs if all lists are empty
@@ -541,7 +601,10 @@ class BluesServer:
         for writer in queue:
             try:
                 await self.write([key, self.cache[key]["value"][0]], writer)
-                self._internal_lpop(["lpop", key])
+                command = ["lpop", key]
+                self._internal_lpop(command)
+                self._notify_watchers(key, writer)
+                await self._propagate_to_replicas(command)
                 self.blocked_writers[writer].set()
                 # queue is a shallow copy (copy by reference)
                 queue.remove(writer)
@@ -631,6 +694,9 @@ class BluesServer:
         print(f"Executed XADD for {writer.get_extra_info('peername')}")
 
         self._notify_watchers(key, writer)
+        # TODO: figure out how this behaves with transactions
+        # and what the correct behavior would be
+        await self._propagate_to_replicas(command)
 
         if self.transactions.get(writer, None) is None:
             await self.blxread_helper(key)
@@ -882,6 +948,7 @@ class BluesServer:
         print(f"Executed INCR for {writer.get_extra_info('peername')}")
 
         self._notify_watchers(key, writer)
+        await self._propagate_to_replicas(command)
 
     async def multi(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if len(command) != 1:
@@ -892,6 +959,8 @@ class BluesServer:
             return
         self.transactions[writer] = []
         await self.write("OK", writer, True)
+        # cannot propagate transactions to replicas because commands from other
+        #  clients will have to be blocked until the transaction is over, not ideal
 
     async def exec(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         if len(command) != 1:
@@ -1004,7 +1073,7 @@ class BluesServer:
             try:
                 await self.server.serve_forever()
             except asyncio.exceptions.CancelledError:
-                # async with server automatically calls server.close() and server.wait_closer()
+                # async with server automatically calls server.close() and server.wait_closed()
                 print("\nShutting down gracefully")
                 self.server.close_clients()
 

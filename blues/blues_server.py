@@ -144,6 +144,11 @@ class BluesServer:
             while True:
                 command, error, is_null, is_error = await self.bluessp.decode(reader)
                 if command is None and error:
+                    host = ":".join([str(item) for item in client[:2]])
+                    replica = self.replicas.get(host, None)
+                    if replica is not None:
+                        print(replica)
+                        del self.replicas[host]
                     # disconnect client
                     break
                 elif not isinstance(command, list) or error or is_error or is_null:
@@ -245,6 +250,14 @@ class BluesServer:
         command = [com.lower() for com in command]
 
         try:
+            # don't do anything if it's just an ack
+            # TODO: keep track of replica offsets
+            command.index("ack")
+            return
+        except ValueError:
+            pass
+
+        try:
             offset = command[command.index("getack") + 1]
             if offset == "*":
                 await self.write(
@@ -308,24 +321,45 @@ class BluesServer:
 
     async def wait(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         try:
+            entry = datetime.now(self.timezone)
             num_replicas, timeout = int(command[1]), int(command[2])
         except ValueError:
             await self.write(const.INVALID_COMMAND, writer, True, True)
             print(f"Executed WAIT for {writer.get_extra_info('peername')}")
             return
 
-        try:
-            async with asyncio.timeout(timeout / 1000):
-                while num_replicas > (n := len(self.replicas)):
-                    await asyncio.sleep(0)
-                else:
-                    await self.write(n, writer)
-                    print(f"Executed WAIT for {writer.get_extra_info('peername')}")
-                    return
-        except TimeoutError:
-            await self.write(len(self.replicas), writer)
+        current_offset = self.master_repl_offset
+        n = await self._count_updated_replicas(current_offset)
+        while num_replicas > n and datetime.now(self.timezone) - entry < timedelta(
+            milliseconds=timeout
+        ):
+            n = await self._count_updated_replicas(current_offset)
+            await asyncio.sleep(0)
+        else:
+            await self.write(n, writer)
             print(f"Executed WAIT for {writer.get_extra_info('peername')}")
             return
+
+    async def _count_updated_replicas(self, previous_offset: int = 0) -> int:
+        current_offset = self.master_repl_offset
+        if current_offset == previous_offset:
+            return len(self.replicas)
+
+        count = 0
+
+        await self._propagate_to_replicas(["REPLCONF", "GETACK", "*"])
+
+        for replica in self.replicas.values():
+            writer = replica.get("writer", None)
+
+            if writer is not None:
+                # TODO: handler error, is_null, is_error
+                offset, *_ = await self.bluessp.decode(writer._reader)
+
+                if offset == current_offset:
+                    count += 1
+
+        return count
 
     async def _propagate_to_replicas(self, command: list[str]) -> None:
         # TODO: add buffering

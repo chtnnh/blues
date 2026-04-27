@@ -123,10 +123,10 @@ class BluesServer:
                 elif not isinstance(command, list) or error or is_error or is_null:
                     print(f"INVALID COMMAND: {command} sent by {client}")
 
-                self.replica_repl_offset += len(self.bluessp.encode(command))
-
                 print(f"Routing command for {client}")
                 await self.route_command(command, self.master.writer)  # type: ignore
+
+                self.replica_repl_offset += len(self.bluessp.encode(command))
 
         except ConnectionError, BrokenPipeError:
             print(f"Client {client} disconnected unexpectedly")

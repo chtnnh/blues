@@ -30,6 +30,9 @@ ERR_NESTED_MULTI = "ERR MULTI calls can not be nested"
 ERR_OUTSIDE_MULTI = "ERR * without MULTI"
 ERR_WATCH_INSIDE_MULTI = "ERR WATCH inside MULTI is not allowed"
 
+# temporary: base64 encoding of empty RDB file
+EMPTY_RDB = "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog=="
+
 # requires python >= 3.12
 type AcceptedMessageTypes = (
     bytes | None | bool | int | float | str | list[Any] | dict[Any, Any]

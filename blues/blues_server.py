@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
 from operator import itemgetter
@@ -9,6 +10,7 @@ from typing import Any
 import blues.constants as const
 from blues.blues_async_client import BluesAsyncClient
 from blues.blues_server_config import BluesServerConfig
+from blues.bluessp import BluesStanzaProtocolAsync
 from blues.deps.pygtrie import StringTrie
 from blues.utils import flatten
 
@@ -24,6 +26,7 @@ class BluesServer:
         self.port = config.port
         self.msg_size = config.msg_size
         self.encoding = config.encoding
+        self.bluessp = BluesStanzaProtocolAsync(self.encoding)
         self.timezone = config.timezone
         self.replica_of = config.replica_of
 
@@ -87,7 +90,13 @@ class BluesServer:
 
             # TODO: make this more comprehensive
             if "PSYNC" in command:
-                res = res.split()[0]  # type: ignore
+                if res.split()[0] != expected:  # type: ignore
+                    raise RuntimeError(
+                        f"Error connecting to master: expected {expected} for {command}, got {res}"
+                    )
+                # read rdb
+                res = await self.master.read_rdb()
+                return
 
             if res != expected:
                 raise RuntimeError(
@@ -101,31 +110,21 @@ class BluesServer:
 
         try:
             while True:
-                data = await reader.read(self.msg_size)
-                data = data.decode()
-
-                if not data:
+                command, error, is_null, is_error = await self.bluessp.decode(reader)
+                if command is None and error:
+                    # disconnect client
                     break
+                elif not isinstance(command, list) or error or is_error or is_null:
+                    print(f"INVALID COMMAND: {command} sent by {client}")
 
-                command = self.parse_command(data)
                 print(f"Routing command for {client}")
-                await self.route_command(command, writer)
+                await self.route_command(command, writer)  # type: ignore
 
         except ConnectionError, BrokenPipeError:
             print(f"Client {client} disconnected unexpectedly")
 
         finally:
             await self.disconnect_client(writer)
-
-    def parse_command(self, data: str) -> list[str]:
-        # TODO: replace with bluessp
-        command = []
-        params = data.split(const.CRLF)
-
-        for i in range(2, len(params), 2):
-            command.append(params[i])
-
-        return command
 
     async def route_command(
         self,
@@ -134,25 +133,33 @@ class BluesServer:
         in_transaction: bool = False,
     ) -> None:
         com = command[0].lower()
+
         try:
             queue = self.transactions.get(writer, None)
+
             if queue is None or in_transaction:
                 command_handler = getattr(self, com)
                 await command_handler(command, writer)
+
             elif com == "multi":
                 await self.write(const.ERR_NESTED_MULTI, writer, True, True)
+
             elif com == "watch":
                 await self.write(const.ERR_WATCH_INSIDE_MULTI, writer, True, True)
+
             elif com == "discard":
                 self.transactions.pop(writer, [])
                 self.internal_queue.pop(writer, [])
                 self._internal_unwatch(writer)
                 await self.write("OK", writer, True)
+
             elif com == "exec":
                 await self.exec(command, writer)
+
             else:
                 queue.append(command)
                 await self.write(const.QUEUED, writer, True)
+
         except AttributeError:
             await self.write(
                 const.UNKNOWN_COMMAND.replace("*", com),
@@ -160,33 +167,6 @@ class BluesServer:
                 True,
                 True,
             )
-
-    def encode_response(
-        self,
-        msg: bytes | int | str | list[Any],
-        isSimple: bool = False,
-        isError: bool = False,
-    ) -> bytes:
-        # TODO: replace with bluessp
-        if isSimple:
-            if isError:
-                return f"-{msg}{const.CRLF}".encode(self.encoding)
-            return f"+{msg}{const.CRLF}".encode(self.encoding)
-
-        match msg:
-            case bytes():
-                return msg
-
-            case int():
-                return f":{msg}{const.CRLF}".encode(self.encoding)
-
-            case list():
-                arr = "".join(
-                    [self.encode_response(i).decode(self.encoding) for i in msg]
-                )
-                return f"*{len(msg)}{const.CRLF}{arr}".encode(self.encoding)
-
-        return f"${len(msg)}{const.CRLF}{msg}{const.CRLF}".encode(self.encoding)  # type: ignore
 
     async def write(
         self,
@@ -196,7 +176,7 @@ class BluesServer:
         isError: bool = False,
     ) -> None:
         try:
-            writer.write(self.encode_response(msg, isSimple, isError))
+            writer.write(self.bluessp.encode(msg, isSimple, isError))
             await writer.drain()
         except Exception as e:
             print(f"Error responding to {writer.get_extra_info('peername')}: {e}")
@@ -256,6 +236,10 @@ class BluesServer:
 
         if repl_id == "?":
             await self.write(f"FULLRESYNC {self.repl_id} 0", writer, True)
+            # don't encode rdb as it is serialized binary
+            rdb = base64.b64decode(const.EMPTY_RDB)
+            await self.write(f"${len(rdb)}\r\n".encode(self.encoding) + rdb, writer)
+
         else:
             await self.write(
                 f"PSYNC {self.repl_id} {self.master_repl_offset - offset}", writer, True

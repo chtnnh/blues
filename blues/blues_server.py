@@ -306,6 +306,27 @@ class BluesServer:
             )
         print(f"Executed PSYNC for {writer.get_extra_info('peername')}")
 
+    async def wait(self, command: list[str], writer: asyncio.StreamWriter) -> None:
+        try:
+            num_replicas, timeout = int(command[1]), int(command[2])
+        except ValueError:
+            await self.write(const.INVALID_COMMAND, writer, True, True)
+            print(f"Executed WAIT for {writer.get_extra_info('peername')}")
+            return
+
+        try:
+            async with asyncio.timeout(timeout / 1000):
+                while num_replicas > (n := len(self.replicas)):
+                    await asyncio.sleep(0)
+                else:
+                    await self.write(n, writer)
+                    print(f"Executed WAIT for {writer.get_extra_info('peername')}")
+                    return
+        except TimeoutError:
+            await self.write(len(self.replicas), writer)
+            print(f"Executed WAIT for {writer.get_extra_info('peername')}")
+            return
+
     async def _propagate_to_replicas(self, command: list[str]) -> None:
         # TODO: add buffering
         com = self.bluessp.encode(command)

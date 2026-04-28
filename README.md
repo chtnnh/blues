@@ -15,12 +15,15 @@ _redis_ subset in python3
 3. Blues Client (async)
 4. Blues CLI Client (async), mostly for manual testing, but pretty functional
 5. Transactions
+6. Optimistic Locking
+7. Replication
 
 ### What's coming
-1. Optimistic Locking
-2. Replication
-3. Persistence
-4. More if I can finish the above before the free challenge changes
+1. Persistence
+2. More if I can finish the above before the free challenge changes
+
+### Dependencies
+1. [Typer](https://typer.tiangolo.com/) - amazing library for Python CLIs
 
 ### Dev Tools
 1. [uv](https://docs.astral.sh/uv/)
@@ -31,6 +34,7 @@ _redis_ subset in python3
 ### Attribution and Thanks
 1. ["Build Your Own Redis" Challenge](https://codecrafters.io/challenges/redis)
 2. [StringTrie implementation](https://github.com/mina86/pygtrie/)
+3. [Typer](https://typer.tiangolo.com/)
 
 ### License
 [Apache 2.0](LICENSE)

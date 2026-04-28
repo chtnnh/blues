@@ -9,6 +9,7 @@ from typing import Any
 
 import blues.constants as const
 from blues.blues_async_client import BluesAsyncClient
+from blues.blues_client_config import BluesClientConfig
 from blues.blues_server_config import BluesServerConfig
 from blues.bluessp import BluesStanzaProtocolAsync
 from blues.deps.pygtrie import StringTrie
@@ -33,10 +34,14 @@ class BluesServer:
         if config.replica_of != "":
             master_host, master_port = config.replica_of.split()
             self.master_host, self.master_port = master_host, int(master_port)
-            self.master = BluesAsyncClient(self.master_host, self.master_port)
+            self.client_config = BluesClientConfig(
+                self.master_host, self.master_port, self.encoding
+            )
+            self.master: BluesAsyncClient | None
         else:
             self.master_host = None
             self.master_port = None
+            self.client_config = None
             self.master = None
 
         self.repl_id = "".join(choice(ascii_letters + digits) for _ in range(40))
@@ -68,8 +73,8 @@ class BluesServer:
         self._constructed_via_factory = True
         cls.__init__(self, config)
 
-        if self.master is not None:
-            await self.master.create()
+        if self.master is not None and self.client_config is not None:
+            await self.master.create(self.client_config)
             await self._connect_to_master()
 
         return self

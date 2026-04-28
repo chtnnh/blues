@@ -1,20 +1,12 @@
 from shlex import shlex
 from typing import Any
 
-from blues.blues_async_client import BluesAsyncClient
-from blues.constants import ENCODING, HOST, PORT, TIMEOUT, AcceptedMessageTypes
+from blues.blues_client_base import BluesClientBase
+from blues.blues_client_config import BluesClientConfig
+from blues.constants import AcceptedMessageTypes
 
 
-class BluesCliClient(BluesAsyncClient):
-    def __init__(
-        self,
-        host: str = HOST,
-        port: int = PORT,
-        encoding: str = ENCODING,
-        timeout: float = TIMEOUT,
-    ) -> None:
-        super().__init__(host, port, encoding, timeout)
-
+class BluesCliClient(BluesClientBase):
     def _parse_list(self, input: list[str], index: int) -> tuple[list[Any], int]:
         if input[index] != "[":
             print(f"Unexpected char {input[index]}")
@@ -137,8 +129,7 @@ class BluesCliClient(BluesAsyncClient):
         await super().write(com)
         return await super().read()
 
-    async def run(self) -> None:
-        await super().create()
+    async def run(self, config: BluesClientConfig = BluesClientConfig()) -> None:
         print(f"Current address: {self.writer.get_extra_info('sockname')}")
         while True:
             try:

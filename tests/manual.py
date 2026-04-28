@@ -3,6 +3,7 @@ import asyncio
 import typer
 
 from blues.blues_cli_client import BluesCliClient
+from blues.blues_client_config import BluesClientConfig
 from blues.constants import ENCODING, HOST, PORT, TIMEOUT
 
 app = typer.Typer()
@@ -14,7 +15,8 @@ async def main(
     encoding: str = ENCODING,
     timeout: float = TIMEOUT,
 ):
-    client = BluesCliClient(host, port, encoding, timeout)
+    config = BluesClientConfig(host, port, encoding, timeout)
+    client = await BluesCliClient.create(config)
     await client.run()
 
 

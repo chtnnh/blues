@@ -14,7 +14,7 @@ wheels = [
 [[package]]
 name = "blues"
 version = "0.1.1"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "typer" },
 ]

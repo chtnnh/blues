@@ -114,7 +114,7 @@ class BluesServer:
         if self.master is None:
             raise RuntimeError("Cannot call replication_handler without master")
 
-        client = self.master.writer.get_extra_info("peername")
+        master = self.master.writer.get_extra_info("peername")
 
         try:
             while True:
@@ -126,15 +126,15 @@ class BluesServer:
                     # disconnect master
                     break
                 elif not isinstance(command, list) or error or is_error or is_null:
-                    print(f"INVALID COMMAND: {command} sent by {client}")
+                    print(f"INVALID COMMAND: {command} sent by {master}")
 
-                print(f"Routing command for {client}")
+                print(f"Routing command for {master}")
                 await self.route_command(command, self.master.writer)  # type: ignore
 
                 self.replica_repl_offset += len(self.bluessp.encode(command))
 
         except ConnectionError, BrokenPipeError:
-            print(f"Client {client} disconnected unexpectedly")
+            print(f"Master {master} disconnected unexpectedly")
 
         finally:
             # TODO: figure out if replica needs to shutdown if connection with master is lost
@@ -251,14 +251,19 @@ class BluesServer:
 
     async def replconf(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         set_writer = False
-        host = ":".join([str(info) for info in writer.get_extra_info("peername")[:2]])
         command = [com.lower() for com in command]
 
+        host = ":".join([str(info) for info in writer.get_extra_info("peername")[:2]])
+        replica = self.replicas.get(host, {})
+
         try:
-            # don't do anything if it's just an ack
-            # TODO: keep track of replica offsets
-            command.index("ack")
+            repl_offset = int(command[command.index("ack") + 1])
+            replica["repl_offset"] = repl_offset
+
+            self.replicas[host] = replica
+            print(f"Executed REPLCONF for {writer.get_extra_info('peername')}")
             return
+
         except ValueError:
             pass
 
@@ -283,11 +288,11 @@ class BluesServer:
         capabilities = [
             command[int(idx) + 1] for idx, flag in enumerate(command) if flag == "capa"
         ]
-        replica = self.replicas.get(host, {})
         val = replica.get("capabilities", [])
         val.extend(capabilities)
 
         replica["capabilities"] = val
+
         if set_writer:
             replica["writer"] = writer
             replica["port"] = port  # type: ignore

@@ -343,6 +343,13 @@ class BluesServer:
             return
 
         target_offset = self.master_repl_offset
+        # TODO: update condition to match even if target_offset is not 0
+        # but there are no pending writes in the buffer
+        if target_offset == 0:
+            await self.write(len(self.replicas), writer)
+            print(f"Executed WAIT for {writer.get_extra_info('peername')}")
+            return
+
         await self._propagate_to_replicas(["REPLCONF", "GETACK", "*"])
 
         while datetime.now(self.timezone) - entry < timedelta(milliseconds=timeout):

@@ -152,7 +152,6 @@ class BluesServer:
                     host = ":".join([str(item) for item in client[:2]])
                     replica = self.replicas.get(host, None)
                     if replica is not None:
-                        print(replica)
                         del self.replicas[host]
                     # disconnect client
                     break
@@ -166,6 +165,12 @@ class BluesServer:
             print(f"Client {client} disconnected unexpectedly")
 
         finally:
+            # delete client from replicas if applicable
+            host = ":".join([str(item) for item in client[:2]])
+            replica = self.replicas.get(host, None)
+            if replica is not None:
+                del self.replicas[host]
+
             await self.disconnect_client(writer)
 
     async def route_command(

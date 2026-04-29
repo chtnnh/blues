@@ -149,10 +149,6 @@ class BluesServer:
             while True:
                 command, error, is_null, is_error = await self.bluessp.decode(reader)
                 if command is None and error:
-                    host = ":".join([str(item) for item in client[:2]])
-                    replica = self.replicas.get(host, None)
-                    if replica is not None:
-                        del self.replicas[host]
                     # disconnect client
                     break
                 elif not isinstance(command, list) or error or is_error or is_null:
@@ -165,6 +161,12 @@ class BluesServer:
             print(f"Client {client} disconnected unexpectedly")
 
         finally:
+            # delete client from replicas if applicable
+            host = ":".join([str(item) for item in client[:2]])
+            replica = self.replicas.get(host, None)
+            if replica is not None:
+                del self.replicas[host]
+
             await self.disconnect_client(writer)
 
     async def route_command(
@@ -339,6 +341,7 @@ class BluesServer:
 
         current_offset = self.master_repl_offset
         n = await self._count_updated_replicas(current_offset)
+
         while num_replicas > n and datetime.now(self.timezone) - entry < timedelta(
             milliseconds=timeout
         ):

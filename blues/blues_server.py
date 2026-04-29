@@ -336,41 +336,35 @@ class BluesServer:
     async def wait(self, command: list[str], writer: asyncio.StreamWriter) -> None:
         try:
             entry = datetime.now(self.timezone)
-            num_replicas, timeout = int(command[1]), int(command[2])
+            target_replicas, timeout = int(command[1]), int(command[2])
         except ValueError:
             await self.write(const.INVALID_COMMAND, writer, True, True)
             print(f"Executed WAIT for {writer.get_extra_info('peername')}")
             return
 
-        current_offset = self.master_repl_offset
-        n = await self._count_updated_replicas(current_offset)
-
-        while num_replicas > n and datetime.now(self.timezone) - entry < timedelta(
-            milliseconds=timeout
-        ):
-            n = await self._count_updated_replicas(current_offset)
-            await asyncio.sleep(0)
-        else:
-            await self.write(n, writer)
-            print(f"Executed WAIT for {writer.get_extra_info('peername')}")
-            return
-
-    async def _count_updated_replicas(self, previous_offset: int = 0) -> int:
-        current_offset = self.master_repl_offset
-        # if current_offset == previous_offset:
-        #     return len(self.replicas)
-
-        count = 0
-
+        target_offset = self.master_repl_offset
         await self._propagate_to_replicas(["REPLCONF", "GETACK", "*"])
 
-        for replica in self.replicas.values():
-            # TODO: figure out a better way to prevent bombarding replicas with getack
-            await asyncio.sleep(0.1)
+        while datetime.now(self.timezone) - entry < timedelta(milliseconds=timeout):
+            n = self._count_updated_replicas(target_offset)
+            if target_replicas <= n:
+                await self.write(n, writer)
+                print(f"Executed WAIT for {writer.get_extra_info('peername')}")
+                return
 
+            # TODO: figure out a better way to allow repl_offsets to update
+            await asyncio.sleep(0.05)
+
+        n = self._count_updated_replicas(target_offset)
+        await self.write(n, writer)
+        print(f"Executed WAIT for {writer.get_extra_info('peername')}")
+
+    def _count_updated_replicas(self, target_offset: int) -> int:
+        count = 0
+
+        for replica in self.replicas.values():
             offset = replica.get("repl_offset")
-            print(f"master: {current_offset}, replica: {offset}")
-            if offset == current_offset:
+            if offset == target_offset:
                 count += 1
 
         return count

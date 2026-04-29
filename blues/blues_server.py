@@ -280,6 +280,9 @@ class BluesServer:
                     writer,
                     to_master=True,
                 )
+                print(
+                    f"Executed REPLCONF GETACK for master, offset (not including last replconf): {self.replica_repl_offset}"
+                )
             return
         except ValueError:
             pass
